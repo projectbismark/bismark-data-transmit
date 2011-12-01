@@ -6,7 +6,13 @@ endif
 ifdef UPLOADS_URL
 CFLAGS += -DUPLOADS_URL="\"$(UPLOADS_URL)\""
 endif
-LDFLAGS += -lcurl -lz -lssl -lcrypto
+ifdef UPLOADS_ROOT
+CFLAGS += -DUPLOADS_ROOT="\"$(UPLOADS_ROOT)\""
+endif
+ifdef RETRY_INTERVAL_MINUTES
+CFLAGS += -DRETRY_INTERVAL_MINUTES="\"$(RETRY_INTERVAL_MINUTES)\""
+endif
+LDFLAGS += -lcurl -lz -lssl -lcrypto -lpthread
 SRCS = \
 	bismark-data-transmit.c
 OBJS = $(SRCS:.c=.o)
