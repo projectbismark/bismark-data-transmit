@@ -10,6 +10,9 @@
 #ifndef UPLOADS_URL
 #define UPLOADS_URL  "http://127.0.0.1:8000/upload/"
 #endif
+#ifndef BUILD_ID
+#define BUILD_ID  "git"
+#endif
 #define MAX_URL_LENGTH  2000
 #define BUF_LEN  (sizeof(struct inotify_event) * 10)
 
@@ -44,9 +47,20 @@ int curl_send(CURL* curl, char* filename) {
     fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
     return -1;
   }
+  char* encoded_buildid = curl_easy_escape(curl, BUILD_ID, 0);
+  if (encoded_buildid == NULL) {
+    fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
+    return -1;
+  }
   char url[MAX_URL_LENGTH];
-  snprintf(url, sizeof(url), "%s?filename=%s", UPLOADS_URL, filename);
+  snprintf(url,
+           sizeof(url),
+           "%s?filename=%s&buildid=%s",
+           UPLOADS_URL,
+           encoded_filename,
+           encoded_buildid);
   curl_free(encoded_filename);
+  curl_free(encoded_buildid);
 
   /* Set up and execute the transfer. */
   if (curl_easy_setopt(curl, CURLOPT_URL, url)
@@ -76,7 +90,8 @@ int main(int argc, char** argv) {
     fprintf(stderr, "Error initializing cURL: %s\n", curl_easy_strerror(rc));
     return rc;
   }
-  if (curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L)) {
+  if (curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L)
+      || curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1)) {
     fprintf(stderr, "Error intializing cURL: %s\n", curl_error_message);
     return 1;
   }
