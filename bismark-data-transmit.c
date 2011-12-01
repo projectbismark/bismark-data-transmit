@@ -7,6 +7,7 @@
 
 #define ARRAYSIZE(a)  (sizeof(a)/sizeof(a[0]))
 
+#define UPLOADS_ROOT "/tmp/bismark-uploads"
 #ifndef UPLOADS_URL
 #define UPLOADS_URL  "http://127.0.0.1:8000/upload/"
 #endif
@@ -16,20 +17,43 @@
 #define MAX_URL_LENGTH  2000
 #define BUF_LEN  (sizeof(struct inotify_event) * 10)
 
-/* The list of directories to monitor for files to upload. They must exist
- * before the program starts. IMPORTANT: These must end with a slash! */
-static const char* upload_directories[] = {
-  "/tmp/bismark-uploads/passive/",
-  "/tmp/bismark-uploads/passive-frequent/",
+/* List of directories to monitor for files to upload, as subdirectories of
+ * UPLOADS_ROOT. They must exist before the program starts and must NOT end with
+ * a slash. */
+static const char* upload_subdirectories[] = {
+  "passive",
+  "passive-frequent",
 };
+
+/* This gets filled in with the full path names of the upload
+ * directories we monitor, which are specified in upload_subdirectories. */
+static const char* upload_directories[ARRAYSIZE(upload_subdirectories)];
 
 /* This gets filled in with the watch descriptors corresponding
  * to the directories in upload_directories. */
-static int watch_descriptors[ARRAYSIZE(upload_directories)];
+static int watch_descriptors[ARRAYSIZE(upload_subdirectories)];
 
 static const char curl_error_message[CURL_ERROR_SIZE];
 
-int curl_send(CURL* curl, char* filename) {
+static int initialize_upload_directories() {
+  int idx;
+  for (idx = 0; idx < ARRAYSIZE(upload_subdirectories); ++idx) {
+    char filename[PATH_MAX];
+    snprintf(filename,
+             sizeof(filename),
+             "%s/%s/",
+             UPLOADS_ROOT,
+             upload_subdirectories[idx]);
+    upload_directories[idx] = strdup(filename);
+    if (upload_directories[idx] == NULL) {
+      perror("strdup for upload_directories");
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int curl_send(CURL* curl, const char* filename, const char* module) {
   /* Open the file we're going to upload and determine its
    * size. (cURL needs to the know the size.) */
   FILE* handle = fopen(filename, "rb");
@@ -43,24 +67,23 @@ int curl_send(CURL* curl, char* filename) {
 
   /* Build the URL. */
   char* encoded_filename = curl_easy_escape(curl, filename, 0);
-  if (encoded_filename == NULL) {
-    fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
-    return -1;
-  }
   char* encoded_buildid = curl_easy_escape(curl, BUILD_ID, 0);
-  if (encoded_buildid == NULL) {
+  char* encoded_module = curl_easy_escape(curl, module, 0);
+  if (!encoded_filename || !encoded_buildid || !encoded_module) {
     fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
     return -1;
   }
   char url[MAX_URL_LENGTH];
   snprintf(url,
            sizeof(url),
-           "%s?filename=%s&buildid=%s",
+           "%s?filename=%s&buildid=%s&module=%s",
            UPLOADS_URL,
            encoded_filename,
-           encoded_buildid);
+           encoded_buildid,
+           encoded_module);
   curl_free(encoded_filename);
   curl_free(encoded_buildid);
+  curl_free(encoded_module);
 
   /* Set up and execute the transfer. */
   if (curl_easy_setopt(curl, CURLOPT_URL, url)
@@ -78,21 +101,32 @@ int curl_send(CURL* curl, char* filename) {
   return 0;
 }
 
-int main(int argc, char** argv) {
-  /* Initialize cURL */
+static CURL* initialize_curl() {
   CURL* curl = curl_easy_init();
   if (!curl) {
     fprintf(stderr, "Error initializing cURL\n");
-    return 1;
+    return NULL;
   }
   int rc = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error_message);
   if (rc) {
     fprintf(stderr, "Error initializing cURL: %s\n", curl_easy_strerror(rc));
-    return rc;
+    curl_easy_cleanup(curl);
+    return NULL;
   }
   if (curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L)
       || curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1)) {
     fprintf(stderr, "Error intializing cURL: %s\n", curl_error_message);
+    curl_easy_cleanup(curl);
+    return NULL;
+  }
+  return curl;
+}
+
+int main(int argc, char** argv) {
+  initialize_upload_directories();
+
+  CURL* curl = initialize_curl();
+  if (!curl) {
     return 1;
   }
 
@@ -133,7 +167,7 @@ int main(int argc, char** argv) {
             strncpy(filename, upload_directories[idx], sizeof(filename));
             strncat(filename, event->name, sizeof(filename));
             printf("File move detected: %s\n", filename);
-            if (curl_send(curl, filename) == 0) {
+            if (curl_send(curl, filename, upload_subdirectories[idx]) == 0) {
               if (unlink(filename)) {
                 perror("unlink");
                 fprintf(stderr, "Uploaded file not garbage collected\n");
