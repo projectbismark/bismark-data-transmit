@@ -6,7 +6,7 @@ endif
 ifdef UPLOADS_URL
 CFLAGS += -DUPLOADS_URL="\"$(UPLOADS_URL)\""
 endif
-LDFLAGS += -lcurl
+LDFLAGS += -lcurl -lz -lssl -lcrypto
 SRCS = \
 	bismark-data-transmit.c
 OBJS = $(SRCS:.c=.o)
