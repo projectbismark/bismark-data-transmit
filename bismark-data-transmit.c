@@ -27,9 +27,8 @@
 #define MAX_URL_LENGTH  2000
 #define BUF_LEN  (sizeof(struct inotify_event) * 10)
 
-/* List of directories to monitor for files to upload, as subdirectories of
- * UPLOADS_ROOT. They must exist before the program starts and must NOT end with
- * a slash. */
+/* List of directories to monitor for files to upload. There are
+ * directory names relative to UPLOADS_ROOT. */
 static const char** upload_subdirectories = NULL;
 static int num_upload_subdirectories = 0;
 
@@ -43,8 +42,11 @@ static int* watch_descriptors;
 
 static const char curl_error_message[CURL_ERROR_SIZE];
 
+/* This thread runs the function "retry_uploads" */
 static pthread_t retry_thread;
 
+/* Build the upload_subdirectories and upload_directories arrays
+ * by scanning UPLOADS_ROOT. */
 static int initialize_upload_directories() {
   DIR* handle = opendir(UPLOADS_ROOT);
   if (handle == NULL) {
@@ -105,7 +107,8 @@ static int initialize_upload_directories() {
   return 0;
 }
 
-static int curl_send(CURL* curl, const char* filename, const char* module) {
+/* Send a file to the server using cURL. */
+static int curl_send(CURL* curl, const char* filename, const char* directory) {
   /* Open the file we're going to upload and determine its
    * size. (cURL needs to the know the size.) */
   FILE* handle = fopen(filename, "rb");
@@ -120,22 +123,22 @@ static int curl_send(CURL* curl, const char* filename, const char* module) {
   /* Build the URL. */
   char* encoded_filename = curl_easy_escape(curl, filename, 0);
   char* encoded_buildid = curl_easy_escape(curl, BUILD_ID, 0);
-  char* encoded_module = curl_easy_escape(curl, module, 0);
-  if (!encoded_filename || !encoded_buildid || !encoded_module) {
+  char* encoded_directory = curl_easy_escape(curl, directory, 0);
+  if (!encoded_filename || !encoded_buildid || !encoded_directory) {
     fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
     return -1;
   }
   char url[MAX_URL_LENGTH];
   snprintf(url,
            sizeof(url),
-           "%s?filename=%s&buildid=%s&module=%s",
+           "%s?filename=%s&buildid=%s&directory=%s",
            UPLOADS_URL,
            encoded_filename,
            encoded_buildid,
-           encoded_module);
+           encoded_directory);
   curl_free(encoded_filename);
   curl_free(encoded_buildid);
-  curl_free(encoded_module);
+  curl_free(encoded_directory);
 
   /* Set up and execute the transfer. */
   if (curl_easy_setopt(curl, CURLOPT_URL, url)
@@ -174,6 +177,12 @@ static CURL* initialize_curl() {
   return curl;
 }
 
+/* This function runs in a separate thread. It periodically scans the
+ * directories we're monitoring for stray files and tries to upload them again.
+ * A file is considered stray if its "change time" (i.e., ctime) is older than
+ * RETRY_INTERVAL_SECONDS. A file's ctime is updated any time it's modified or
+ * moved, so it is a lower bound on the time since the file was moved into the
+ * uploads directory. */
 static void* retry_uploads(void* arg) {
   while (1) {
     CURL* curl = initialize_curl();
