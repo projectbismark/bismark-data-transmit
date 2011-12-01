@@ -20,11 +20,14 @@ uCap-specific updates. Data from these directories will be processed by
 different entities on the server side.
 5. Restart `bismark-data-transmit` for it to rescan UPLOAD_ROOT and begin
 accepting uploads from the new directories.
-6. To upload files, *move* files into the subdirectories of UPLOAD_ROOT.  **Do
+6. To upload files, *move* files into the subdirectories of UPLOAD_ROOT. **Do
 not create new files directly inside subdirectories of UPLOAD_ROOT.** They will
 not get uploaded in a timely fashion. Instead, create files somewhere else and
 `mv` them into the desired subdirectory.
+7. Collect your files on the server side. Files are not guaranteed to arrive in
+any particular order, since files that fail to upload are retried after a long
+delay (30 minutes by default).
 
-This last point deserves repetition: **Do not create new files directly inside
+Point 6 deserves repetition: **Do not create new files directly inside
 /tmp/bismark-uploads. Instead, create the files elsewhere and `mv` them into
 /tmp/bismark-uploads/<your-desired-subdirectory>.**
