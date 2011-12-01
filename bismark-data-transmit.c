@@ -175,12 +175,11 @@ static CURL* initialize_curl() {
 }
 
 static void* retry_uploads(void* arg) {
-  CURL* curl = initialize_curl();
-  if (curl == NULL) {
-    exit(1);
-  }
-
   while (1) {
+    CURL* curl = initialize_curl();
+    if (curl == NULL) {
+      exit(1);
+    }
     time_t current_time = time(NULL);
     int idx;
     for (idx = 0; idx < num_upload_subdirectories; ++idx) {
@@ -219,6 +218,7 @@ static void* retry_uploads(void* arg) {
         perror("opendir from retry thread");
       }
     }
+    curl_easy_cleanup(curl);
     sleep (RETRY_INTERVAL_SECONDS);
   }
 }
