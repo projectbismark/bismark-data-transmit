@@ -1,6 +1,3 @@
-Bismark-data-transmit
-=====================
-
 This software monitors a set of directories (the "upload directories") for new
 files and uploads them to a server using a persistent HTTP connection.
 
