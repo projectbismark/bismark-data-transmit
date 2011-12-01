@@ -1,5 +1,8 @@
 CC = gcc
 CFLAGS += -c -Wall -O3 -fno-strict-aliasing
+ifdef BISMARK_ID_FILENAME
+CFLAGS += -DBISMARK_ID_FILENAME="\"$(BISMARK_ID_FILENAME)\""
+endif
 ifdef BUILD_ID
 CFLAGS += -DBUILD_ID="\"$(BUILD_ID)\""
 endif

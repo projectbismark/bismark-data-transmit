@@ -11,13 +11,17 @@
 
 #include <curl/curl.h>
 
+#ifndef BISMARK_ID_FILENAME
+#define BISMARK_ID_FILENAME  "/etc/bismark/ID"
+#endif
+#define BISMARK_ID_LEN  14
 #ifndef UPLOADS_ROOT
-#define UPLOADS_ROOT "/tmp/bismark-uploads"
+#define UPLOADS_ROOT  "/tmp/bismark-uploads"
 #endif
 #ifndef RETRY_INTERVAL_MINUTES
-#define RETRY_INTERVAL_MINUTES 30
+#define RETRY_INTERVAL_MINUTES  30
 #endif
-#define RETRY_INTERVAL_SECONDS (RETRY_INTERVAL_MINUTES * 60)
+#define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef UPLOADS_URL
 #define UPLOADS_URL  "http://127.0.0.1:8000/upload/"
 #endif
@@ -26,6 +30,9 @@
 #endif
 #define MAX_URL_LENGTH  2000
 #define BUF_LEN  (sizeof(struct inotify_event) * 10)
+
+/* Will be filled in with this node's Bismark ID. */
+static char bismark_id[BISMARK_ID_LEN];
 
 /* A dynamically allocated list of directories to monitor for files to upload.
  * These are directory names relative to UPLOADS_ROOT. */
@@ -135,21 +142,27 @@ static int curl_send(CURL* curl, const char* filename, const char* directory) {
 
   /* Build the URL. */
   char* encoded_filename = curl_easy_escape(curl, filename, 0);
+  char* encoded_nodeid = curl_easy_escape(curl, bismark_id, 0);
   char* encoded_buildid = curl_easy_escape(curl, BUILD_ID, 0);
   char* encoded_directory = curl_easy_escape(curl, directory, 0);
-  if (!encoded_filename || !encoded_buildid || !encoded_directory) {
+  if (encoded_filename == NULL
+      || encoded_nodeid == NULL
+      || encoded_buildid == NULL
+      || encoded_directory == NULL) {
     fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
     return -1;
   }
   char url[MAX_URL_LENGTH];
   snprintf(url,
            sizeof(url),
-           "%s?filename=%s&buildid=%s&directory=%s",
+           "%s?filename=%s&node_id=%s&build_id=%s&directory=%s",
            UPLOADS_URL,
            encoded_filename,
+           encoded_nodeid,
            encoded_buildid,
            encoded_directory);
   curl_free(encoded_filename);
+  curl_free(encoded_nodeid);
   curl_free(encoded_buildid);
   curl_free(encoded_directory);
 
@@ -243,7 +256,24 @@ static void* retry_uploads(void* arg) {
   }
 }
 
+int read_bismark_id() {
+  FILE* handle = fopen(BISMARK_ID_FILENAME, "r");
+  if (handle == NULL) {
+    perror("fopen");
+    return -1;
+  }
+  if (fread(bismark_id, 1, BISMARK_ID_LEN, handle) != BISMARK_ID_LEN) {
+    perror("fread");
+    return -1;
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
+  if (read_bismark_id()) {
+    return 1;
+  }
+
   if (initialize_upload_subdirectories() || initialize_upload_directories()) {
     return 1;
   }
