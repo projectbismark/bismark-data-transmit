@@ -23,7 +23,7 @@
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef UPLOADS_URL
-#define UPLOADS_URL  "http://127.0.0.1:8000/upload/"
+#define UPLOADS_URL  "https://projectbismark.net:8001/upload/"
 #endif
 #ifndef BUILD_ID
 #define BUILD_ID  "git"
@@ -202,6 +202,13 @@ static CURL* initialize_curl() {
     curl_easy_cleanup(curl);
     return NULL;
   }
+#ifdef SKIP_SSL_VERIFICATION
+  if (curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0)) {
+    fprintf(stderr, "Error setting SSL options: %s\n", curl_error_message);
+    curl_easy_cleanup(curl);
+    return NULL;
+  }
+#endif
   return curl;
 }
 

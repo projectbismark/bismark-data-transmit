@@ -15,6 +15,9 @@ endif
 ifdef RETRY_INTERVAL_MINUTES
 CFLAGS += -DRETRY_INTERVAL_MINUTES="$(RETRY_INTERVAL_MINUTES)"
 endif
+ifdef SKIP_SSL_VERIFICATION
+CFLAGS += -DSKIP_SSL_VERIFICATION="yes"
+endif
 LDFLAGS += -lcurl -lz -lssl -lcrypto -lpthread
 SRCS = \
 	bismark-data-transmit.c
