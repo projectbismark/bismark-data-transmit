@@ -23,7 +23,7 @@
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef UPLOADS_URL
-#define UPLOADS_URL  "https://projectbismark.net:8001/upload/"
+#define UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
 #ifndef BUILD_ID
 #define BUILD_ID  "git"
