@@ -1,3 +1,22 @@
+/**
+ *
+ * This program monitors a set of subdirectories for new files and uploads
+ * those files to a server using cURL.
+ *
+ * There upload algorithm is:
+ * 1. Watch a set of subdirectories (e.g., /tmp/bismark-uploads/passive,
+ *    /tmp/bismark-uploads/active, etc.) for newly moved files. (Only
+ *    files moved into these directories are detected, not new files created
+ *    with the directories.)
+ * 2. For each file, attempt to upload the file to a server using HTTPS PUT via
+ *    libcurl.
+ * 3. If an upload fails (e.g., it times out), then retry the upload every 3
+ *    minutes until is succeeds.
+ * 4. If an upload still hasn't succeeded after an hour, permanently delete
+ *    the file.
+ *
+ **/
+
 #include <dirent.h>
 #include <errno.h>
 #include <signal.h>

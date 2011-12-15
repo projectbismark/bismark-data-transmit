@@ -6,9 +6,7 @@ How to use:
 1. Build a copy of bismark-data-transmit. See bismark-packages for the companion
 OpenWRT package Makefile. You can customize the server URL and upload root
 directory at compile time using OpenWRT's menuconfig.
-2. Install bismark-data-transmit on your BISmark router. Enable
-bismark-data-transmit by running `/etc/init.d/bismark-data-transmit enable &&
-/etc/init.d/bismark-data-transmit start`.
+2. Install bismark-data-transmit on your BISmark router.
 3. Create the UPLOAD_ROOT directory. By default, this is /tmp/bismark-uploads
 but you can change it using OpenWRT's menu system.
 4. Create subdirectories of UPLOAD_ROOT. bismark-data-transmit will monitor
@@ -25,8 +23,13 @@ not create new files directly inside subdirectories of UPLOAD_ROOT.** They will
 not get uploaded in a timely fashion. Instead, create files somewhere else and
 `mv` them into the desired subdirectory.
 7. Collect your files on the server side. Files are not guaranteed to arrive in
-any particular order, since files that fail to upload are retried after a long
-delay (30 minutes by default).
+any particular order, since files that fail to upload are retried after a delay
+(3 minutes by default).
+8. Files that cannot be uploaded within a longer time period (1 hour by default)
+are deleted from the router to reclaim space and are forever lost. A better
+solution would be to use a file system extended attribute to indicate the number
+of failed upload attempts; this would handle the case where the uploader itself
+stops running (e.g., due to a botched upgrade.)
 
 Point 6 deserves repetition: **Do not create new files directly inside
 /tmp/bismark-uploads. Instead, create the files elsewhere and `mv` them into
