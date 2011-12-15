@@ -212,6 +212,7 @@ static void retry_uploads(int sig) {
         }
         if ((S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode))) {
           if (current_time - file_info.st_ctime > MAX_RETRY_INTERVAL_SECONDS) {
+            printf("Garbage collecting file %s\n", absolute_path);
             if (unlink(absolute_path)) {
               perror("unlink from retry function");
               fprintf(stderr, "Uploaded file not garbage collected\n");
