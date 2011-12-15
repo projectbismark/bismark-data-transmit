@@ -1,5 +1,6 @@
 #include <dirent.h>
-#include <pthread.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,11 +48,13 @@ static const char** upload_directories;
  * to the directories in upload_directories. */
 static int* watch_descriptors;
 
+static CURL* curl_handle;
+
 /* cURL's error buffer. Any time cURL has an error, it writes it here. */
 static const char curl_error_message[CURL_ERROR_SIZE];
 
-/* This thread runs the function "retry_uploads" */
-static pthread_t retry_thread;
+/* Set of signals that get blocked while uploading a file. */
+sigset_t block_set;
 
 /* Concatenate two paths. They will be separated with a '/'. result must be at
  * least PATH_MAX bytes long. Return 0 if successful and -1 otherwise. */
@@ -128,7 +131,7 @@ static int initialize_upload_directories() {
 }
 
 /* Send a file to the server using cURL. */
-static int curl_send(CURL* curl, const char* filename, const char* directory) {
+static int curl_send(const char* filename, const char* directory) {
   /* Open the file we're going to upload and determine its
    * size. (cURL needs to the know the size.) */
   FILE* handle = fopen(filename, "rb");
@@ -141,10 +144,10 @@ static int curl_send(CURL* curl, const char* filename, const char* directory) {
   rewind(handle);
 
   /* Build the URL. */
-  char* encoded_filename = curl_easy_escape(curl, filename, 0);
-  char* encoded_nodeid = curl_easy_escape(curl, bismark_id, 0);
-  char* encoded_buildid = curl_easy_escape(curl, BUILD_ID, 0);
-  char* encoded_directory = curl_easy_escape(curl, directory, 0);
+  char* encoded_filename = curl_easy_escape(curl_handle, filename, 0);
+  char* encoded_nodeid = curl_easy_escape(curl_handle, bismark_id, 0);
+  char* encoded_buildid = curl_easy_escape(curl_handle, BUILD_ID, 0);
+  char* encoded_directory = curl_easy_escape(curl_handle, directory, 0);
   if (encoded_filename == NULL
       || encoded_nodeid == NULL
       || encoded_buildid == NULL
@@ -167,13 +170,13 @@ static int curl_send(CURL* curl, const char* filename, const char* directory) {
   curl_free(encoded_directory);
 
   /* Set up and execute the transfer. */
-  if (curl_easy_setopt(curl, CURLOPT_URL, url)
-      || curl_easy_setopt(curl, CURLOPT_READDATA, handle)
-      || curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size)) {
+  if (curl_easy_setopt(curl_handle, CURLOPT_URL, url)
+      || curl_easy_setopt(curl_handle, CURLOPT_READDATA, handle)
+      || curl_easy_setopt(curl_handle, CURLOPT_INFILESIZE, file_size)) {
     fprintf(stderr, "Failed to set cURL options: %s\n", curl_error_message);
     return -1;
   }
-  if (curl_easy_perform(curl)) {
+  if (curl_easy_perform(curl_handle)) {
     fprintf(stderr, "Failed to upload: %s\n", curl_error_message);
     fclose(handle);
     return -1;
@@ -182,54 +185,14 @@ static int curl_send(CURL* curl, const char* filename, const char* directory) {
   return 0;
 }
 
-static CURL* initialize_curl() {
-  CURL* curl = curl_easy_init();
-  if (!curl) {
-    fprintf(stderr, "Error initializing cURL\n");
-    return NULL;
-  }
-  int rc = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error_message);
-  if (rc) {
-    fprintf(stderr, "Error initializing cURL: %s\n", curl_easy_strerror(rc));
-    curl_easy_cleanup(curl);
-    return NULL;
-  }
-  /* CURLOPT_UPLOAD uses HTTP PUT by default. CURLOPT_FAILONERROR causes cURL to
-   * return an error if the Web server returns an HTTP error code. */
-  if (curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L)
-      || curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1)) {
-    fprintf(stderr, "Error intializing cURL: %s\n", curl_error_message);
-    curl_easy_cleanup(curl);
-    return NULL;
-  }
-#ifdef SKIP_SSL_VERIFICATION
-  if (curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0)) {
-    fprintf(stderr, "Error setting SSL options: %s\n", curl_error_message);
-    curl_easy_cleanup(curl);
-    return NULL;
-  }
-#endif
-  return curl;
-}
-
-/* This function runs in a separate thread. It periodically scans the
- * directories we're monitoring for stray files and tries to upload them again.
- * A file is considered stray if its "change time" (i.e., ctime) is older than
- * RETRY_INTERVAL_SECONDS. A file's ctime is updated any time it's modified or
- * moved, so it is a lower bound on the time since the file was moved into the
- * uploads directory. */
-static void* retry_uploads(void* arg) {
-  while (1) {
+static void retry_uploads(int sig) {
+  if (sig == SIGALRM) {
     time_t current_time = time(NULL);
-    CURL* curl = initialize_curl();
-    if (curl == NULL) {
-      exit(1);
-    }
     int idx;
     for (idx = 0; idx < num_upload_subdirectories; ++idx) {
       DIR* handle = opendir(upload_directories[idx]);
       if (handle == NULL) {
-        perror("opendir from retry thread");
+        perror("opendir from retry function");
         continue;
       }
       struct dirent* entry;
@@ -240,28 +203,58 @@ static void* retry_uploads(void* arg) {
         }
         struct stat file_info;
         if (stat(absolute_path, &file_info)) {
-          perror("stat from retry thread");
+          perror("stat from retry function");
           continue;
         }
         if ((S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode))
             && current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
           printf("Retrying file %s\n", absolute_path);
-          if (curl_send(curl, absolute_path, upload_subdirectories[idx]) == 0) {
+          if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
             if (unlink(absolute_path)) {
-              perror("unlink from retry thread");
+              perror("unlink from retry function");
               fprintf(stderr, "Uploaded file not garbage collected\n");
             }
           }
         }
       }
       if (closedir(handle)) {
-        perror("closedir from retry thread");
+        perror("closedir from retry function");
       }
     }
-    curl_easy_cleanup(curl);
-    sleep(RETRY_INTERVAL_SECONDS);
+    alarm(RETRY_INTERVAL_SECONDS);
   }
 }
+
+static int initialize_curl() {
+  curl_handle = curl_easy_init();
+  if (!curl_handle) {
+    fprintf(stderr, "Error initializing cURL\n");
+    return -1;
+  }
+  int rc = curl_easy_setopt(curl_handle, CURLOPT_ERRORBUFFER, curl_error_message);
+  if (rc) {
+    fprintf(stderr, "Error initializing cURL: %s\n", curl_easy_strerror(rc));
+    curl_easy_cleanup(curl_handle);
+    return -1;
+  }
+  /* CURLOPT_UPLOAD uses HTTP PUT by default. CURLOPT_FAILONERROR causes cURL to
+   * return an error if the Web server returns an HTTP error code. */
+  if (curl_easy_setopt(curl_handle, CURLOPT_UPLOAD, 1L)
+      || curl_easy_setopt(curl_handle, CURLOPT_FAILONERROR, 1)) {
+    fprintf(stderr, "Error intializing cURL: %s\n", curl_error_message);
+    curl_easy_cleanup(curl_handle);
+    return -1;
+  }
+#ifdef SKIP_SSL_VERIFICATION
+  if (curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0)) {
+    fprintf(stderr, "Error setting SSL options: %s\n", curl_error_message);
+    curl_easy_cleanup(curl_handle);
+    return -1;
+  }
+#endif
+  return 0;
+}
+
 
 int read_bismark_id() {
   FILE* handle = fopen(BISMARK_ID_FILENAME, "r");
@@ -276,6 +269,20 @@ int read_bismark_id() {
   return 0;
 }
 
+
+static void initialize_signal_handler() {
+  struct sigaction action;
+  action.sa_handler = retry_uploads;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_RESTART;
+  if (sigaction(SIGALRM, &action, NULL)) {
+    perror("sigaction");
+    exit(1);
+  }
+  sigemptyset(&block_set);
+  sigaddset(&block_set, SIGALRM);
+}
+
 int main(int argc, char** argv) {
   if (read_bismark_id()) {
     return 1;
@@ -285,15 +292,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (pthread_create(&retry_thread, NULL, retry_uploads, NULL)) {
-    perror("pthread_create");
+  if(initialize_curl()) {
     return 1;
   }
 
-  CURL* curl = initialize_curl();
-  if (!curl) {
-    return 1;
-  }
+  initialize_signal_handler();
+  alarm(RETRY_INTERVAL_SECONDS);
 
   /* Initialize inotify */
   int inotify_handle = inotify_init();
@@ -322,9 +326,17 @@ int main(int argc, char** argv) {
     char events_buffer[BUF_LEN];
     int length = read(inotify_handle, events_buffer, BUF_LEN);
     if (length < 0) {
-      perror("read");
-      curl_easy_cleanup(curl);
-      return 1;
+      if (errno != EINTR) {
+        perror("read");
+        curl_easy_cleanup(curl_handle);
+        return 1;
+      } else {
+        continue;
+      }
+    }
+    if (sigprocmask(SIG_BLOCK, &block_set, NULL) < 0) {
+      perror("sigprocmask");
+      exit(1);
     }
     int offset = 0;
     while (offset < length) {
@@ -339,7 +351,7 @@ int main(int argc, char** argv) {
               break;
             }
             printf("File move detected: %s\n", absolute_path);
-            if (!curl_send(curl, absolute_path, upload_subdirectories[idx])) {
+            if (!curl_send(absolute_path, upload_subdirectories[idx])) {
               if (unlink(absolute_path)) {
                 perror("unlink failed; uploaded file not garbage collected");
               }
@@ -349,6 +361,10 @@ int main(int argc, char** argv) {
         }
       }
       offset += sizeof(*event) + event->len;
+    }
+    if (sigprocmask(SIG_UNBLOCK, &block_set, NULL) < 0) {
+      perror("sigprocmask");
+      exit(1);
     }
   }
   return 0;

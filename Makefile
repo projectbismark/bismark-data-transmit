@@ -18,7 +18,7 @@ endif
 ifdef SKIP_SSL_VERIFICATION
 CFLAGS += -DSKIP_SSL_VERIFICATION="yes"
 endif
-LDFLAGS += -lcurl -lz -lssl -lcrypto -lpthread
+LDFLAGS += -lcurl -lz -lssl -lcrypto
 SRCS = \
 	bismark-data-transmit.c
 OBJS = $(SRCS:.c=.o)
