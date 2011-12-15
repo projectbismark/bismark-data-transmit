@@ -20,7 +20,7 @@
 #define UPLOADS_ROOT  "/tmp/bismark-uploads"
 #endif
 #ifndef RETRY_INTERVAL_MINUTES
-#define RETRY_INTERVAL_MINUTES  30
+#define RETRY_INTERVAL_MINUTES  3
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef UPLOADS_URL
