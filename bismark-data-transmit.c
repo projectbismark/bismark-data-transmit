@@ -195,8 +195,7 @@ static int curl_send(const char* filename, const char* directory) {
   /* Set up and execute the transfer. */
   if (curl_easy_setopt(curl_handle, CURLOPT_URL, url)
       || curl_easy_setopt(curl_handle, CURLOPT_READDATA, handle)
-      || curl_easy_setopt(curl_handle, CURLOPT_INFILESIZE, file_size)
-      || curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 1)) {
+      || curl_easy_setopt(curl_handle, CURLOPT_INFILESIZE, file_size)) {
     fprintf(stderr, "Failed to set cURL options: %s\n", curl_error_message);
     return -1;
   }
