@@ -42,10 +42,6 @@
 #define RETRY_INTERVAL_MINUTES  3
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
-#ifndef MAX_RETRY_INTERVAL_MINUTES
-#define MAX_RETRY_INTERVAL_MINUTES  60
-#endif
-#define MAX_RETRY_INTERVAL_SECONDS  (MAX_RETRY_INTERVAL_MINUTES * 60)
 #ifndef DEFAULT_UPLOADS_URL
 #define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
@@ -232,20 +228,13 @@ static void retry_uploads(int sig) {
           perror("stat from retry function");
           continue;
         }
-        if ((S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode))) {
-          if (current_time - file_info.st_ctime > MAX_RETRY_INTERVAL_SECONDS) {
-            printf("Garbage collecting file %s\n", absolute_path);
+        if ((S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode))
+            && (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS)) {
+          printf("Retrying file %s\n", absolute_path);
+          if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
             if (unlink(absolute_path)) {
               perror("unlink from retry function");
               fprintf(stderr, "Uploaded file not garbage collected\n");
-            }
-          } else if (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
-            printf("Retrying file %s\n", absolute_path);
-            if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
-              if (unlink(absolute_path)) {
-                perror("unlink from retry function");
-                fprintf(stderr, "Uploaded file not garbage collected\n");
-              }
             }
           }
         }
