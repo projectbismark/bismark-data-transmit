@@ -46,8 +46,8 @@
 #define MAX_RETRY_INTERVAL_MINUTES  60
 #endif
 #define MAX_RETRY_INTERVAL_SECONDS  (MAX_RETRY_INTERVAL_MINUTES * 60)
-#ifndef UPLOADS_URL
-#define UPLOADS_URL  "https://projectbismark.net:8081/upload/"
+#ifndef DEFAULT_UPLOADS_URL
+#define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
 #ifndef BUILD_ID
 #define BUILD_ID  "git"
@@ -57,6 +57,9 @@
 
 /* Will be filled in with this node's Bismark ID. */
 static char bismark_id[BISMARK_ID_LEN];
+
+/* Will be filled in with the URL to post uploads. */
+static char uploads_url[MAX_URL_LENGTH];
 
 /* A dynamically allocated list of directories to monitor for files to upload.
  * These are directory names relative to UPLOADS_ROOT. */
@@ -182,7 +185,7 @@ static int curl_send(const char* filename, const char* directory) {
   snprintf(url,
            sizeof(url),
            "%s?filename=%s&node_id=%s&build_id=%s&directory=%s",
-           UPLOADS_URL,
+           uploads_url,
            encoded_filename,
            encoded_nodeid,
            encoded_buildid,
@@ -285,7 +288,6 @@ static int initialize_curl() {
   return 0;
 }
 
-
 int read_bismark_id() {
   FILE* handle = fopen(BISMARK_ID_FILENAME, "r");
   if (handle == NULL) {
@@ -298,7 +300,6 @@ int read_bismark_id() {
   }
   return 0;
 }
-
 
 static void initialize_signal_handler() {
   struct sigaction action;
@@ -314,6 +315,12 @@ static void initialize_signal_handler() {
 }
 
 int main(int argc, char** argv) {
+  if (argc != 2) {
+    strncpy(uploads_url, DEFAULT_UPLOADS_URL, MAX_URL_LENGTH);
+  } else {
+    strncpy(uploads_url, argv[1], MAX_URL_LENGTH);
+  }
+
   if (read_bismark_id()) {
     return 1;
   }
