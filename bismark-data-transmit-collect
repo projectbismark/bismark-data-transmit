@@ -9,6 +9,6 @@ while true; do
         awk '{ print $14, $2, $1 }' |
         sort -nr |
         awk "BEGIN { total = 0 } { total += \$2; if (total > $MAX_UPLOADS_BYTES) print \$3 }" |
-        xargs rm
+        xargs -r rm
     sleep $COLLECTION_INTERVAL_SECONDS
 done
