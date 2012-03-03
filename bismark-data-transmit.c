@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -94,6 +95,7 @@ static int join_paths(const char* first, const char* second, char* result) {
 static int initialize_upload_subdirectories() {
   DIR* handle = opendir(UPLOADS_ROOT);
   if (handle == NULL) {
+    syslog(LOG_ERR, "opendir %s: %s", UPLOADS_ROOT, strerror(errno));
     perror("opendir " UPLOADS_ROOT);
     return -1;
   }
@@ -309,6 +311,8 @@ int main(int argc, char** argv) {
   } else {
     strncpy(uploads_url, argv[1], MAX_URL_LENGTH);
   }
+
+  openlog("bismark-data-transmit", 0, 0);
 
   if (read_bismark_id()) {
     return 1;
