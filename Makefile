@@ -20,7 +20,8 @@ CFLAGS += -DSKIP_SSL_VERIFICATION="yes"
 endif
 LDFLAGS += -lcurl -lz -lssl -lcrypto
 SRCS = \
-	bismark-data-transmit.c
+	bismark-data-transmit.c \
+	upload_list.c
 OBJS = $(SRCS:.c=.o)
 EXE = bismark-data-transmit
 

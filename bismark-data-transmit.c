@@ -32,6 +32,8 @@
 
 #include <curl/curl.h>
 
+#include "upload_list.h"
+
 #ifndef BISMARK_ID_FILENAME
 #define BISMARK_ID_FILENAME  "/etc/bismark/ID"
 #endif
@@ -45,6 +47,9 @@
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef DEFAULT_UPLOADS_URL
 #define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
+#endif
+#ifndef MAX_UPLOADS_BYTES
+#define MAX_UPLOADS_BYTES  5000000
 #endif
 #ifndef BUILD_ID
 #define BUILD_ID  "git"
@@ -106,7 +111,7 @@ static int initialize_upload_subdirectories() {
     if (entry->d_name[0] == '.') {  /* Skip hidden, ".", and ".." */
       continue;
     }
-    char absolute_filename[PATH_MAX];
+    char absolute_filename[PATH_MAX + 1];
     if (join_paths(UPLOADS_ROOT, entry->d_name, absolute_filename)) {
       return -1;
     }
@@ -150,7 +155,7 @@ static int initialize_upload_directories() {
   }
   int idx;
   for (idx = 0; idx < num_upload_subdirectories; ++idx) {
-    char absolute_path[PATH_MAX];
+    char absolute_path[PATH_MAX + 1];
     if (join_paths(UPLOADS_ROOT, upload_subdirectories[idx], absolute_path)) {
       return -1;
     }
@@ -258,6 +263,9 @@ static int curl_send(const char* filename, const char* directory) {
 
 static void retry_uploads(int sig) {
   if (sig == SIGALRM) {
+    upload_list_t files_to_sort;
+    upload_list_init(&files_to_sort);
+
     time_t current_time = time(NULL);
     int idx;
     for (idx = 0; idx < num_upload_subdirectories; ++idx) {
@@ -271,7 +279,7 @@ static void retry_uploads(int sig) {
       }
       struct dirent* entry;
       while ((entry = readdir(handle))) {
-        char absolute_path[PATH_MAX];
+        char absolute_path[PATH_MAX + 1];
         if (join_paths(upload_directories[idx], entry->d_name, absolute_path)) {
           continue;
         }
@@ -283,23 +291,51 @@ static void retry_uploads(int sig) {
                  strerror(errno));
           continue;
         }
-        if ((S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode))
-            && (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS)) {
-          syslog(LOG_INFO, "Retrying file: %s", absolute_path);
-          if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
-            if (unlink(absolute_path)) {
-              syslog(LOG_ERR,
-                     "retry_uploads:unlink(\"%s\"): %s",
-                     absolute_path,
-                     strerror(errno));
+        if (S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode)) {
+          if (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
+            syslog(LOG_INFO, "Retrying file: %s", absolute_path);
+            if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
+              if (unlink(absolute_path)) {
+                syslog(LOG_ERR,
+                       "retry_uploads:unlink(\"%s\"): %s",
+                       absolute_path,
+                       strerror(errno));
+              } else {
+                continue;
+              }
             }
           }
+
+          upload_list_append(&files_to_sort,
+                             absolute_path,
+                             file_info.st_ctime,
+                             file_info.st_size);
         }
       }
       if (closedir(handle)) {
         syslog(LOG_ERR, "retry_uploads:closedir: %s", strerror(errno));
       }
     }
+
+    if (files_to_sort.entries != NULL) {
+      upload_list_sort(&files_to_sort);
+      int total_bytes = 0;
+      for (idx = 0; idx < files_to_sort.length; ++idx) {
+        upload_entry_t* entry = &files_to_sort.entries[idx];
+        if (total_bytes + entry->size > MAX_UPLOADS_BYTES) {
+          if (unlink(files_to_sort.entries[idx].filename)) {
+            syslog(LOG_ERR,
+                   "retry_uploads:unlink(\"%s\"): %s",
+                   files_to_sort.entries[idx].filename,
+                   strerror(errno));
+          }
+        } else {
+          total_bytes += entry->size;
+        }
+      }
+    }
+    upload_list_destroy(&files_to_sort);
+
     alarm(RETRY_INTERVAL_SECONDS);
   }
 }
@@ -452,7 +488,7 @@ int main(int argc, char** argv) {
         int idx;
         for (idx = 0; idx < num_upload_subdirectories; ++idx) {
           if (event->wd == watch_descriptors[idx]) {
-            char absolute_path[PATH_MAX];
+            char absolute_path[PATH_MAX + 1];
             if (join_paths(upload_directories[idx], event->name, absolute_path)) {
               break;
             }
