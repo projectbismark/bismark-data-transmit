@@ -83,6 +83,7 @@ sigset_t block_set;
  * least PATH_MAX bytes long. Return 0 if successful and -1 otherwise. */
 static int join_paths(const char* first, const char* second, char* result) {
   if (snprintf(result, PATH_MAX, "%s/%s", first, second) < 0) {
+    syslog(LOG_ERR, "snprintf: %s", strerror(errno));
     perror("snprintf");
     return -1;
   } else {
@@ -110,6 +111,7 @@ static int initialize_upload_subdirectories() {
     }
     struct stat dir_info;
     if (stat(absolute_filename, &dir_info)) {
+      syslog(LOG_ERR, "stat: %s", strerror(errno));
       perror("stat");
       return -1;
     }
@@ -119,6 +121,7 @@ static int initialize_upload_subdirectories() {
           upload_subdirectories,
           num_upload_subdirectories * sizeof(upload_subdirectories[0]));
       if (upload_subdirectories == NULL) {
+        syslog(LOG_ERR, "realloc: %s", strerror(errno));
         perror("realloc");
         return -1;
       }
@@ -136,6 +139,7 @@ static int initialize_upload_directories() {
   upload_directories = calloc(num_upload_subdirectories,
                               sizeof(upload_directories[0]));
   if (upload_directories == NULL) {
+    syslog(LOG_ERR, "calloc: %s", strerror(errno));
     perror("calloc");
     return -1;
   }
@@ -147,6 +151,7 @@ static int initialize_upload_directories() {
     }
     upload_directories[idx] = strdup(absolute_path);
     if (upload_directories[idx] == NULL) {
+      syslog(LOG_ERR, "strdup for upload_directories: %s", strerror(errno));
       perror("strdup for upload_directories");
       return -1;
     }
@@ -160,6 +165,7 @@ static int curl_send(const char* filename, const char* directory) {
    * size. (cURL needs to the know the size.) */
   FILE* handle = fopen(filename, "rb");
   if (!handle) {
+    syslog(LOG_ERR, "fopen: %s", strerror(errno));
     perror("fopen");
     return -1;
   }
@@ -216,6 +222,7 @@ static void retry_uploads(int sig) {
     for (idx = 0; idx < num_upload_subdirectories; ++idx) {
       DIR* handle = opendir(upload_directories[idx]);
       if (handle == NULL) {
+        syslog(LOG_ERR, "opendir from retry function: %s", strerror(errno));
         perror("opendir from retry function");
         continue;
       }
@@ -227,6 +234,7 @@ static void retry_uploads(int sig) {
         }
         struct stat file_info;
         if (stat(absolute_path, &file_info)) {
+          syslog(LOG_ERR, "stat from retry function: %s", strerror(errno));
           perror("stat from retry function");
           continue;
         }
@@ -235,6 +243,7 @@ static void retry_uploads(int sig) {
           printf("Retrying file %s\n", absolute_path);
           if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
             if (unlink(absolute_path)) {
+              syslog(LOG_ERR, "unlink from retry function: %s", strerror(errno));
               perror("unlink from retry function");
               fprintf(stderr, "Uploaded file not garbage collected\n");
             }
@@ -242,6 +251,7 @@ static void retry_uploads(int sig) {
         }
       }
       if (closedir(handle)) {
+        syslog(LOG_ERR, "closedir from retry function: %s", strerror(errno));
         perror("closedir from retry function");
       }
     }
@@ -282,10 +292,12 @@ static int initialize_curl() {
 int read_bismark_id() {
   FILE* handle = fopen(BISMARK_ID_FILENAME, "r");
   if (handle == NULL) {
+    syslog(LOG_ERR, "fopen: %s", strerror(errno));
     perror("fopen");
     return -1;
   }
   if (fread(bismark_id, 1, BISMARK_ID_LEN, handle) != BISMARK_ID_LEN) {
+    syslog(LOG_ERR, "fread: %s", strerror(errno));
     perror("fread");
     return -1;
   }
@@ -298,6 +310,7 @@ static void initialize_signal_handler() {
   sigemptyset(&action.sa_mask);
   action.sa_flags = SA_RESTART;
   if (sigaction(SIGALRM, &action, NULL)) {
+    syslog(LOG_ERR, "sigaction: %s", strerror(errno));
     perror("sigaction");
     exit(1);
   }
@@ -312,7 +325,7 @@ int main(int argc, char** argv) {
     strncpy(uploads_url, argv[1], MAX_URL_LENGTH);
   }
 
-  openlog("bismark-data-transmit", 0, 0);
+  openlog("bismark-data-transmit", LOG_PERROR, LOG_USER);
 
   if (read_bismark_id()) {
     return 1;
@@ -332,6 +345,7 @@ int main(int argc, char** argv) {
   /* Initialize inotify */
   int inotify_handle = inotify_init();
   if (inotify_handle < 0) {
+    syslog(LOG_ERR, "inotify_init: %s", strerror(errno));
     perror("inotify_init");
     return 1;
   }
@@ -339,6 +353,7 @@ int main(int argc, char** argv) {
   watch_descriptors = calloc(num_upload_subdirectories,
                              sizeof(watch_descriptors[0]));
   if (watch_descriptors == NULL) {
+    syslog(LOG_ERR, "calloc: %s", strerror(errno));
     perror("calloc");
     return 1;
   }
@@ -347,6 +362,7 @@ int main(int argc, char** argv) {
                                                upload_directories[idx],
                                                IN_MOVED_TO);
     if (watch_descriptors[idx] < 0) {
+      syslog(LOG_ERR, "inotify_add_watch: %s", strerror(errno));
       perror("inotify_add_watch");
       return 1;
     }
@@ -357,6 +373,7 @@ int main(int argc, char** argv) {
     int length = read(inotify_handle, events_buffer, BUF_LEN);
     if (length < 0) {
       if (errno != EINTR) {
+        syslog(LOG_ERR, "read: %s", strerror(errno));
         perror("read");
         curl_easy_cleanup(curl_handle);
         return 1;
@@ -365,6 +382,7 @@ int main(int argc, char** argv) {
       }
     }
     if (sigprocmask(SIG_BLOCK, &block_set, NULL) < 0) {
+      syslog(LOG_ERR, "sigprocmask: %s", strerror(errno));
       perror("sigprocmask");
       exit(1);
     }
@@ -383,6 +401,7 @@ int main(int argc, char** argv) {
             printf("File move detected: %s\n", absolute_path);
             if (!curl_send(absolute_path, upload_subdirectories[idx])) {
               if (unlink(absolute_path)) {
+                syslog(LOG_ERR, "unlink failed; uploaded file not garbage collected: %s", strerror(errno));
                 perror("unlink failed; uploaded file not garbage collected");
               }
             }
@@ -393,6 +412,7 @@ int main(int argc, char** argv) {
       offset += sizeof(*event) + event->len;
     }
     if (sigprocmask(SIG_UNBLOCK, &block_set, NULL) < 0) {
+      syslog(LOG_ERR, "sigprocmask: %s", strerror(errno));
       perror("sigprocmask");
       exit(1);
     }
