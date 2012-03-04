@@ -51,6 +51,9 @@
 #ifndef MAX_UPLOADS_BYTES
 #define MAX_UPLOADS_BYTES  5000000
 #endif
+#ifndef FAILURES_LOG
+#define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
+#endif
 #ifndef BUILD_ID
 #define BUILD_ID  "git"
 #endif
@@ -75,6 +78,10 @@ static const char** upload_directories;
 /* This gets populated with the inotify watch descriptors corresponding
  * to the directories in upload_directories. */
 static int* watch_descriptors;
+
+/* This gets populated with counters of failed uploads. The length and indices
+ * will match those of upload_directories. */
+static int* failure_counters;
 
 static CURL* curl_handle;
 
@@ -261,10 +268,39 @@ static int curl_send(const char* filename, const char* directory) {
   return 0;
 }
 
+static void log_upload_failure(int index) {
+  ++failure_counters[index];
+}
+
+static int write_upload_failures_log() {
+  FILE* handle = fopen(FAILURES_LOG, "w");
+  if (handle == NULL) {
+    syslog(LOG_ERR,
+           "log_upload_failure:fopen(%s): %s",
+           FAILURES_LOG,
+           strerror(errno));
+    return -1;
+  }
+  int idx;
+  for (idx = 0; idx < num_upload_subdirectories; ++idx) {
+    if (fprintf(handle,
+                "%s %d\n",
+                upload_subdirectories[idx],
+                failure_counters[idx]) < 0) {
+      syslog(LOG_ERR, "log_upload_failure:fprintf: %s", strerror(errno));
+      fclose(handle);
+      return -1;
+    }
+  }
+  fclose(handle);
+  return 0;
+}
+
 static void retry_uploads(int sig) {
   if (sig == SIGALRM) {
     upload_list_t files_to_sort;
     upload_list_init(&files_to_sort);
+    int new_upload_failure = 0;
 
     time_t current_time = time(NULL);
     int idx;
@@ -309,7 +345,8 @@ static void retry_uploads(int sig) {
           upload_list_append(&files_to_sort,
                              absolute_path,
                              file_info.st_ctime,
-                             file_info.st_size);
+                             file_info.st_size,
+                             idx);
         }
       }
       if (closedir(handle)) {
@@ -331,6 +368,9 @@ static void retry_uploads(int sig) {
                    "retry_uploads:unlink(\"%s\"): %s",
                    files_to_sort.entries[idx].filename,
                    strerror(errno));
+          } else {
+            log_upload_failure(files_to_sort.entries[idx].index);
+            new_upload_failure = 1;
           }
         } else {
           total_bytes += entry->size;
@@ -338,6 +378,10 @@ static void retry_uploads(int sig) {
       }
     }
     upload_list_destroy(&files_to_sort);
+
+    if (new_upload_failure) {
+      (void)write_upload_failures_log();
+    }
 
     alarm(RETRY_INTERVAL_SECONDS);
   }
@@ -431,6 +475,13 @@ int main(int argc, char** argv) {
   }
 
   if (initialize_upload_subdirectories() || initialize_upload_directories()) {
+    return 1;
+  }
+
+  failure_counters = calloc(num_upload_subdirectories,
+                            sizeof(failure_counters[0]));
+  if (failure_counters == NULL) {
+    syslog(LOG_ERR, "main:calloc: %s", strerror(errno));
     return 1;
   }
 
