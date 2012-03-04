@@ -86,7 +86,7 @@ sigset_t block_set;
  * least PATH_MAX bytes long. Return 0 if successful and -1 otherwise. */
 static int join_paths(const char* first, const char* second, char* result) {
   if (snprintf(result, PATH_MAX, "%s/%s", first, second) < 0) {
-    perror("snprintf");
+    syslog(LOG_ERR, "join_paths:snprintf: %s", strerror(errno));
     return -1;
   } else {
     return 0;
@@ -98,8 +98,10 @@ static int join_paths(const char* first, const char* second, char* result) {
 static int initialize_upload_subdirectories() {
   DIR* handle = opendir(UPLOADS_ROOT);
   if (handle == NULL) {
-    syslog(LOG_ERR, "opendir %s: %s", UPLOADS_ROOT, strerror(errno));
-    perror("opendir " UPLOADS_ROOT);
+    syslog(LOG_ERR,
+           "initialize_upload_subdirectories:opendir(\"%s\"): %s",
+           UPLOADS_ROOT,
+           strerror(errno));
     return -1;
   }
   struct dirent* entry;
@@ -113,7 +115,10 @@ static int initialize_upload_subdirectories() {
     }
     struct stat dir_info;
     if (stat(absolute_filename, &dir_info)) {
-      perror("stat");
+      syslog(LOG_ERR,
+             "initialize_upload_subdirectories:stat(\"%s\"): %s",
+             absolute_filename,
+             strerror(errno));
       return -1;
     }
     if (S_ISDIR(dir_info.st_mode)) {
@@ -122,7 +127,9 @@ static int initialize_upload_subdirectories() {
           upload_subdirectories,
           num_upload_subdirectories * sizeof(upload_subdirectories[0]));
       if (upload_subdirectories == NULL) {
-        perror("realloc");
+        syslog(LOG_ERR,
+               "initialize_upload_subdirectories:realloc: %s",
+               strerror(errno));
         return -1;
       }
       upload_subdirectories[num_upload_subdirectories - 1]
@@ -139,7 +146,9 @@ static int initialize_upload_directories() {
   upload_directories = calloc(num_upload_subdirectories,
                               sizeof(upload_directories[0]));
   if (upload_directories == NULL) {
-    perror("calloc");
+    syslog(LOG_ERR,
+           "initialize_upload_directories:calloc: %s",
+           strerror(errno));
     return -1;
   }
   int idx;
@@ -150,7 +159,10 @@ static int initialize_upload_directories() {
     }
     upload_directories[idx] = strdup(absolute_path);
     if (upload_directories[idx] == NULL) {
-      perror("strdup for upload_directories");
+      syslog(LOG_ERR,
+             "upload_directories:strdup(\"%s\"): %s",
+             absolute_path,
+             strerror(errno));
       return -1;
     }
   }
@@ -163,7 +175,7 @@ static int curl_send(const char* filename, const char* directory) {
    * size. (cURL needs to the know the size.) */
   FILE* handle = fopen(filename, "rb");
   if (!handle) {
-    perror("fopen");
+    syslog(LOG_ERR, "curl_send:fopen(\"%s\"): %s", filename, strerror(errno));
     return -1;
   }
   fseek(handle, 0L, SEEK_END);
@@ -172,14 +184,35 @@ static int curl_send(const char* filename, const char* directory) {
 
   /* Build the URL. */
   char* encoded_filename = curl_easy_escape(curl_handle, filename, 0);
+  if (encoded_filename == NULL) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_escape(\"%s\"): %s\n",
+           filename,
+           curl_error_message);
+    return -1;
+  }
   char* encoded_nodeid = curl_easy_escape(curl_handle, bismark_id, 0);
+  if(encoded_nodeid == NULL) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_escape(\"%s\"): %s\n",
+           bismark_id,
+           curl_error_message);
+    return -1;
+  }
   char* encoded_buildid = curl_easy_escape(curl_handle, BUILD_ID, 0);
+  if(encoded_buildid == NULL) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_escape(\"%s\"): %s\n",
+           BUILD_ID,
+           curl_error_message);
+    return -1;
+  }
   char* encoded_directory = curl_easy_escape(curl_handle, directory, 0);
-  if (encoded_filename == NULL
-      || encoded_nodeid == NULL
-      || encoded_buildid == NULL
-      || encoded_directory == NULL) {
-    fprintf(stderr, "Failed to encode URL: %s\n", curl_error_message);
+  if(encoded_directory == NULL) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_escape(\"%s\"): %s\n",
+           directory,
+           curl_error_message);
     return -1;
   }
   char url[MAX_URL_LENGTH];
@@ -197,14 +230,28 @@ static int curl_send(const char* filename, const char* directory) {
   curl_free(encoded_directory);
 
   /* Set up and execute the transfer. */
-  if (curl_easy_setopt(curl_handle, CURLOPT_URL, url)
-      || curl_easy_setopt(curl_handle, CURLOPT_READDATA, handle)
-      || curl_easy_setopt(curl_handle, CURLOPT_INFILESIZE, file_size)) {
-    fprintf(stderr, "Failed to set cURL options: %s\n", curl_error_message);
+  if (curl_easy_setopt(curl_handle, CURLOPT_URL, url)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_URL, \"%s\"): %s",
+           url,
+           curl_error_message);
+    return -1;
+  }
+  if (curl_easy_setopt(curl_handle, CURLOPT_READDATA, handle)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_READDATA): %s",
+           curl_error_message);
+    return -1;
+  }
+  if (curl_easy_setopt(curl_handle, CURLOPT_INFILESIZE, file_size)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_INFILESIZE, %ld): %s",
+           file_size,
+           curl_error_message);
     return -1;
   }
   if (curl_easy_perform(curl_handle)) {
-    fprintf(stderr, "Failed to upload: %s\n", curl_error_message);
+    syslog(LOG_ERR, "curl_send:curl_easy_perform: %s", curl_error_message);
     fclose(handle);
     return -1;
   }
@@ -244,7 +291,7 @@ static void retry_uploads(int sig) {
     files_to_sort.entries = malloc(
         files_to_sort.capacity * sizeof(files_to_sort.entries[0]));
     if (files_to_sort.entries == NULL) {
-      perror("malloc");
+      syslog(LOG_ERR, "retry_uploads:malloc: %s", strerror(errno));
     }
 
     time_t current_time = time(NULL);
@@ -252,7 +299,10 @@ static void retry_uploads(int sig) {
     for (idx = 0; idx < num_upload_subdirectories; ++idx) {
       DIR* handle = opendir(upload_directories[idx]);
       if (handle == NULL) {
-        perror("opendir from retry function");
+        syslog(LOG_ERR,
+               "retry_uploads:opendir(\"%s\"): %s",
+               upload_directories[idx],
+               strerror(errno));
         continue;
       }
       struct dirent* entry;
@@ -263,16 +313,21 @@ static void retry_uploads(int sig) {
         }
         struct stat file_info;
         if (stat(absolute_path, &file_info)) {
-          perror("stat from retry function");
+          syslog(LOG_ERR,
+                 "retry_uploads:stat(\"%s\"): %s",
+                 absolute_path,
+                 strerror(errno));
           continue;
         }
         if (S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode)) {
           if (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
-            printf("Retrying file %s\n", absolute_path);
+            syslog(LOG_INFO, "Retrying file: %s", absolute_path);
             if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
               if (unlink(absolute_path)) {
-                perror("unlink from retry function");
-                fprintf(stderr, "Uploaded file not garbage collected\n");
+                syslog(LOG_ERR,
+                       "retry_uploads:unlink(\"%s\"): %s",
+                       absolute_path,
+                       strerror(errno));
               } else {
                 continue;
               }
@@ -286,12 +341,14 @@ static void retry_uploads(int sig) {
                 files_to_sort.entries,
                 files_to_sort.capacity * sizeof(files_to_sort.entries[0]));
             if (new_entries == NULL) {
-              free(files_to_sort.entries);
+              syslog(LOG_ERR, "retry_uploads:realloc: %s", strerror(errno));
+            } else {
+              files_to_sort.entries = new_entries;
             }
-            files_to_sort.entries = new_entries;
           }
 
-          if (files_to_sort.entries != NULL) {
+          if (files_to_sort.entries != NULL &&
+              files_to_sort.length < files_to_sort.capacity) {
             ++files_to_sort.length;
             upload_entry_t* entry =
                 &files_to_sort.entries[files_to_sort.length - 1];
@@ -302,22 +359,27 @@ static void retry_uploads(int sig) {
         }
       }
       if (closedir(handle)) {
-        perror("closedir from retry function");
+        syslog(LOG_ERR, "retry_uploads:closedir: %s", strerror(errno));
       }
     }
 
     if (files_to_sort.entries != NULL) {
       qsort(files_to_sort.entries,
-          files_to_sort.length,
-          sizeof(files_to_sort.entries[0]),
-          compare_uploads);
-      int total_size = 0;
+            files_to_sort.length,
+            sizeof(files_to_sort.entries[0]),
+            compare_uploads);
+      int total_bytes = 0;
       for (idx = 0; idx < files_to_sort.length; ++idx) {
         upload_entry_t* entry = &files_to_sort.entries[idx];
-        if (total_size + entry->size > MAX_UPLOADS_BYTES) {
-          unlink(files_to_sort.entries[idx].filename);
+        if (total_bytes + entry->size > MAX_UPLOADS_BYTES) {
+          if (unlink(files_to_sort.entries[idx].filename)) {
+            syslog(LOG_ERR,
+                   "retry_uploads:unlink(\"%s\"): %s",
+                   files_to_sort.entries[idx].filename,
+                   strerror(errno));
+          }
         } else {
-          total_size += entry->size;
+          total_bytes += entry->size;
         }
       }
       free(files_to_sort.entries);
@@ -330,26 +392,38 @@ static void retry_uploads(int sig) {
 static int initialize_curl() {
   curl_handle = curl_easy_init();
   if (!curl_handle) {
-    fprintf(stderr, "Error initializing cURL\n");
+    syslog(LOG_ERR, "initialize_curl:curl_easy_init");
     return -1;
   }
   int rc = curl_easy_setopt(curl_handle, CURLOPT_ERRORBUFFER, curl_error_message);
   if (rc) {
-    fprintf(stderr, "Error initializing cURL: %s\n", curl_easy_strerror(rc));
+    syslog(LOG_ERR,
+           "initialize_curl:curl_easy_setopt(CURLOPT_ERRORBUFFER): %s",
+           curl_easy_strerror(rc));
     curl_easy_cleanup(curl_handle);
     return -1;
   }
-  /* CURLOPT_UPLOAD uses HTTP PUT by default. CURLOPT_FAILONERROR causes cURL to
-   * return an error if the Web server returns an HTTP error code. */
-  if (curl_easy_setopt(curl_handle, CURLOPT_UPLOAD, 1L)
-      || curl_easy_setopt(curl_handle, CURLOPT_FAILONERROR, 1)) {
-    fprintf(stderr, "Error intializing cURL: %s\n", curl_error_message);
+  /* CURLOPT_UPLOAD uses HTTP PUT by default. */
+  if (curl_easy_setopt(curl_handle, CURLOPT_UPLOAD, 1L)) {
+    syslog(LOG_ERR,
+           "initialize_curl:curl_easy_setopt(CURLOPT_UPLOAD): %s",
+           curl_error_message);
+    curl_easy_cleanup(curl_handle);
+    return -1;
+  }
+  /* Make cURL return an error if the Web server returns an HTTP error code. */
+  if (curl_easy_setopt(curl_handle, CURLOPT_FAILONERROR, 1)) {
+    syslog(LOG_ERR,
+           "initialize_curl:curl_easy_setopt(CURLOPT_FAILONERROR): %s",
+           curl_error_message);
     curl_easy_cleanup(curl_handle);
     return -1;
   }
 #ifdef SKIP_SSL_VERIFICATION
   if (curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0)) {
-    fprintf(stderr, "Error setting SSL options: %s\n", curl_error_message);
+    syslog(LOG_ERR,
+           "initialize_curl:curl_easy_setopt(CURLOPT_SSL_VERIFYPEER): %s",
+           curl_error_message);
     curl_easy_cleanup(curl_handle);
     return -1;
   }
@@ -360,11 +434,17 @@ static int initialize_curl() {
 int read_bismark_id() {
   FILE* handle = fopen(BISMARK_ID_FILENAME, "r");
   if (handle == NULL) {
-    perror("fopen");
+    syslog(LOG_ERR,
+           "read_bismark_id:fopen(\"%s\"): %s",
+           BISMARK_ID_FILENAME,
+           strerror(errno));
     return -1;
   }
   if (fread(bismark_id, 1, BISMARK_ID_LEN, handle) != BISMARK_ID_LEN) {
-    perror("fread");
+    syslog(LOG_ERR,
+           "read_bismark_id:fread(\"%s\"): %s",
+           BISMARK_ID_FILENAME,
+           strerror(errno));
     return -1;
   }
   return 0;
@@ -376,7 +456,7 @@ static void initialize_signal_handler() {
   sigemptyset(&action.sa_mask);
   action.sa_flags = SA_RESTART;
   if (sigaction(SIGALRM, &action, NULL)) {
-    perror("sigaction");
+    syslog(LOG_ERR, "initialize_signal_handler:sigaction: %s", strerror(errno));
     exit(1);
   }
   sigemptyset(&block_set);
@@ -390,7 +470,7 @@ int main(int argc, char** argv) {
     strncpy(uploads_url, argv[1], MAX_URL_LENGTH);
   }
 
-  openlog("bismark-data-transmit", 0, 0);
+  openlog("bismark-data-transmit", LOG_PERROR, LOG_USER);
 
   if (read_bismark_id()) {
     return 1;
@@ -410,14 +490,14 @@ int main(int argc, char** argv) {
   /* Initialize inotify */
   int inotify_handle = inotify_init();
   if (inotify_handle < 0) {
-    perror("inotify_init");
+    syslog(LOG_ERR, "main:inotify_init: %s", strerror(errno));
     return 1;
   }
   int idx;
   watch_descriptors = calloc(num_upload_subdirectories,
                              sizeof(watch_descriptors[0]));
   if (watch_descriptors == NULL) {
-    perror("calloc");
+    syslog(LOG_ERR, "main:calloc: %s", strerror(errno));
     return 1;
   }
   for (idx = 0; idx < num_upload_subdirectories; ++idx) {
@@ -425,7 +505,10 @@ int main(int argc, char** argv) {
                                                upload_directories[idx],
                                                IN_MOVED_TO);
     if (watch_descriptors[idx] < 0) {
-      perror("inotify_add_watch");
+      syslog(LOG_ERR,
+             "main:inotify_add_watch(\"%s\"): %s",
+             upload_directories[idx],
+             strerror(errno));
       return 1;
     }
   }
@@ -435,7 +518,7 @@ int main(int argc, char** argv) {
     int length = read(inotify_handle, events_buffer, BUF_LEN);
     if (length < 0) {
       if (errno != EINTR) {
-        perror("read");
+        syslog(LOG_ERR, "main:read: %s", strerror(errno));
         curl_easy_cleanup(curl_handle);
         return 1;
       } else {
@@ -443,7 +526,7 @@ int main(int argc, char** argv) {
       }
     }
     if (sigprocmask(SIG_BLOCK, &block_set, NULL) < 0) {
-      perror("sigprocmask");
+      syslog(LOG_ERR, "main:sigprocmask(SIG_BLOCK): %s", strerror(errno));
       exit(1);
     }
     int offset = 0;
@@ -458,10 +541,13 @@ int main(int argc, char** argv) {
             if (join_paths(upload_directories[idx], event->name, absolute_path)) {
               break;
             }
-            printf("File move detected: %s\n", absolute_path);
+            syslog(LOG_INFO, "File move detected: %s", absolute_path);
             if (!curl_send(absolute_path, upload_subdirectories[idx])) {
               if (unlink(absolute_path)) {
-                perror("unlink failed; uploaded file not garbage collected");
+                syslog(LOG_ERR,
+                       "main:unlink(\"%s\"): %s",
+                       absolute_path,
+                       strerror(errno));
               }
             }
             break;
@@ -471,7 +557,7 @@ int main(int argc, char** argv) {
       offset += sizeof(*event) + event->len;
     }
     if (sigprocmask(SIG_UNBLOCK, &block_set, NULL) < 0) {
-      perror("sigprocmask");
+      syslog(LOG_ERR, "main:sigprocmask(SIG_UNBLOCK): %s", strerror(errno));
       exit(1);
     }
   }
