@@ -323,6 +323,9 @@ static void retry_uploads(int sig) {
       for (idx = 0; idx < files_to_sort.length; ++idx) {
         upload_entry_t* entry = &files_to_sort.entries[idx];
         if (total_bytes + entry->size > MAX_UPLOADS_BYTES) {
+          syslog(LOG_INFO,
+                 "Removing old upload: %s",
+                 files_to_sort.entries[idx].filename);
           if (unlink(files_to_sort.entries[idx].filename)) {
             syslog(LOG_ERR,
                    "retry_uploads:unlink(\"%s\"): %s",
@@ -462,6 +465,7 @@ int main(int argc, char** argv) {
              strerror(errno));
       return 1;
     }
+    syslog(LOG_INFO, "Watching %s", upload_directories[idx]);
   }
 
   while (1) {
