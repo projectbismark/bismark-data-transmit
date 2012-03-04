@@ -46,6 +46,9 @@
 #ifndef DEFAULT_UPLOADS_URL
 #define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
+#ifndef MAX_UPLOADS_BYTES
+#define MAX_UPLOADS_BYTES  5000000
+#endif
 #ifndef BUILD_ID
 #define BUILD_ID  "git"
 #endif
@@ -209,8 +212,41 @@ static int curl_send(const char* filename, const char* directory) {
   return 0;
 }
 
+typedef struct {
+  char filename[PATH_MAX];
+  time_t last_modified;
+  size_t size;
+} upload_entry_t;
+
+typedef struct {
+  int capacity;
+  int length;
+  upload_entry_t* entries;
+} upload_list_t;
+
+static int compare_uploads(const void* first, const void* second) {
+  const upload_entry_t* first_entry = first;
+  const upload_entry_t* second_entry = second;
+  if (first_entry->last_modified < second_entry->last_modified) {
+    return 1;
+  } else if (first_entry->last_modified > second_entry->last_modified) {
+    return -1;
+  } else {
+    return 0;
+  }
+}
+
 static void retry_uploads(int sig) {
   if (sig == SIGALRM) {
+    upload_list_t files_to_sort;
+    files_to_sort.capacity = 16;
+    files_to_sort.length = 0;
+    files_to_sort.entries = malloc(
+        files_to_sort.capacity * sizeof(files_to_sort.entries[0]));
+    if (files_to_sort.entries == NULL) {
+      perror("malloc");
+    }
+
     time_t current_time = time(NULL);
     int idx;
     for (idx = 0; idx < num_upload_subdirectories; ++idx) {
@@ -230,14 +266,38 @@ static void retry_uploads(int sig) {
           perror("stat from retry function");
           continue;
         }
-        if ((S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode))
-            && (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS)) {
-          printf("Retrying file %s\n", absolute_path);
-          if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
-            if (unlink(absolute_path)) {
-              perror("unlink from retry function");
-              fprintf(stderr, "Uploaded file not garbage collected\n");
+        if (S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode)) {
+          if (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
+            printf("Retrying file %s\n", absolute_path);
+            if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
+              if (unlink(absolute_path)) {
+                perror("unlink from retry function");
+                fprintf(stderr, "Uploaded file not garbage collected\n");
+              } else {
+                continue;
+              }
             }
+          }
+
+          if (files_to_sort.entries != NULL &&
+              files_to_sort.length >= files_to_sort.capacity) {
+            files_to_sort.capacity *= 2;
+            void* new_entries = realloc(
+                files_to_sort.entries,
+                files_to_sort.capacity * sizeof(files_to_sort.entries[0]));
+            if (new_entries == NULL) {
+              free(files_to_sort.entries);
+            }
+            files_to_sort.entries = new_entries;
+          }
+
+          if (files_to_sort.entries != NULL) {
+            ++files_to_sort.length;
+            upload_entry_t* entry =
+                &files_to_sort.entries[files_to_sort.length - 1];
+            strncpy(entry->filename, absolute_path, sizeof(entry->filename));
+            entry->last_modified = file_info.st_ctime;
+            entry->size = file_info.st_size;
           }
         }
       }
@@ -245,6 +305,24 @@ static void retry_uploads(int sig) {
         perror("closedir from retry function");
       }
     }
+
+    if (files_to_sort.entries != NULL) {
+      qsort(files_to_sort.entries,
+          files_to_sort.length,
+          sizeof(files_to_sort.entries[0]),
+          compare_uploads);
+      int total_size = 0;
+      for (idx = 0; idx < files_to_sort.length; ++idx) {
+        upload_entry_t* entry = &files_to_sort.entries[idx];
+        if (total_size + entry->size > MAX_UPLOADS_BYTES) {
+          unlink(files_to_sort.entries[idx].filename);
+        } else {
+          total_size += entry->size;
+        }
+      }
+      free(files_to_sort.entries);
+    }
+
     alarm(RETRY_INTERVAL_SECONDS);
   }
 }
