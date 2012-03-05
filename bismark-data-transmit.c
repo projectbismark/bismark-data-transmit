@@ -484,6 +484,9 @@ int main(int argc, char** argv) {
     syslog(LOG_ERR, "main:calloc: %s", strerror(errno));
     return 1;
   }
+  if (write_upload_failures_log()) {
+    return 1;
+  }
 
   if(initialize_curl()) {
     return 1;
