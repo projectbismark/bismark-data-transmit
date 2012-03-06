@@ -23,7 +23,8 @@ void upload_list_destroy(upload_list_t* list) {
 int upload_list_append(upload_list_t* list,
                        const char* filename,
                        const time_t last_modified,
-                       const size_t size) {
+                       const size_t size,
+                       const int index) {
   if (list->entries == NULL) {
     return -1;
   }
@@ -44,6 +45,7 @@ int upload_list_append(upload_list_t* list,
   strncpy(entry->filename, filename, PATH_MAX);
   entry->last_modified = last_modified;
   entry->size = size;
+  entry->index = index;
   return 0;
 }
 
