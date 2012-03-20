@@ -49,7 +49,7 @@
 #define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
 #ifndef MAX_UPLOADS_BYTES
-#define MAX_UPLOADS_BYTES  5000000
+#define MAX_UPLOADS_BYTES  262144
 #endif
 #ifndef FAILURES_LOG
 #define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
