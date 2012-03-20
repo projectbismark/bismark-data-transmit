@@ -48,8 +48,8 @@
 #ifndef DEFAULT_UPLOADS_URL
 #define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
-#ifndef MAX_UPLOADS_BYTES
-#define MAX_UPLOADS_BYTES  3145728
+#ifndef MAX_UPLOADS_BLOCKS
+#define MAX_UPLOADS_BLOCKS  6144
 #endif
 #ifndef FAILURES_LOG
 #define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
@@ -345,7 +345,7 @@ static void retry_uploads(int sig) {
           upload_list_append(&files_to_sort,
                              absolute_path,
                              file_info.st_ctime,
-                             file_info.st_blocks * 512,
+                             file_info.st_blocks,
                              idx);
         }
       }
@@ -356,10 +356,10 @@ static void retry_uploads(int sig) {
 
     if (files_to_sort.entries != NULL) {
       upload_list_sort(&files_to_sort);
-      int total_bytes = 0;
+      int total_blocks = 0;
       for (idx = 0; idx < files_to_sort.length; ++idx) {
         upload_entry_t* entry = &files_to_sort.entries[idx];
-        if (total_bytes + entry->size > MAX_UPLOADS_BYTES) {
+        if (total_blocks + entry->size > MAX_UPLOADS_BLOCKS) {
           syslog(LOG_INFO,
                  "Removing old upload: %s",
                  files_to_sort.entries[idx].filename);
@@ -373,7 +373,7 @@ static void retry_uploads(int sig) {
             new_upload_failure = 1;
           }
         } else {
-          total_bytes += entry->size;
+          total_blocks += entry->size;
         }
       }
     }
