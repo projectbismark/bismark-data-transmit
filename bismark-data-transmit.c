@@ -49,7 +49,7 @@
 #define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
 #endif
 #ifndef MAX_UPLOADS_BYTES
-#define MAX_UPLOADS_BYTES  262144
+#define MAX_UPLOADS_BYTES  3145728
 #endif
 #ifndef FAILURES_LOG
 #define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
@@ -345,7 +345,7 @@ static void retry_uploads(int sig) {
           upload_list_append(&files_to_sort,
                              absolute_path,
                              file_info.st_ctime,
-                             file_info.st_size,
+                             file_info.st_blocks * 512,
                              idx);
         }
       }
