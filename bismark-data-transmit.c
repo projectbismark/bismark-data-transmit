@@ -19,16 +19,16 @@
 
 #include <dirent.h>
 #include <errno.h>
-#include <signal.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 #include <sys/inotify.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utime.h>
 
 #include <curl/curl.h>
 
@@ -42,7 +42,7 @@
 #define UPLOADS_ROOT  "/tmp/bismark-uploads"
 #endif
 #ifndef RETRY_INTERVAL_MINUTES
-#define RETRY_INTERVAL_MINUTES  3
+#define RETRY_INTERVAL_MINUTES  1
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef DEFAULT_UPLOADS_URL
@@ -50,6 +50,9 @@
 #endif
 #ifndef MAX_UPLOADS_BLOCKS
 #define MAX_UPLOADS_BLOCKS  6144
+#endif
+#ifndef TRANSFER_TIMEOUT
+#define TRANSFER_TIMEOUT 300
 #endif
 #ifndef FAILURES_LOG
 #define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
@@ -87,9 +90,6 @@ static CURL* curl_handle;
 
 /* cURL's error buffer. Any time cURL has an error, it writes it here. */
 static const char curl_error_message[CURL_ERROR_SIZE];
-
-/* Set of signals that get blocked while uploading a file. */
-sigset_t block_set;
 
 /* Concatenate two paths. They will be separated with a '/'. result must be at
  * least PATH_MAX bytes long. Return 0 if successful and -1 otherwise. */
@@ -259,6 +259,13 @@ static int curl_send(const char* filename, const char* directory) {
            curl_error_message);
     return -1;
   }
+  if (curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_TIMEOUT, %ld): %s",
+           file_size,
+           curl_error_message);
+    return -1;
+  }
   if (curl_easy_perform(curl_handle)) {
     syslog(LOG_ERR, "curl_send:curl_easy_perform: %s", curl_error_message);
     fclose(handle);
@@ -296,94 +303,89 @@ static int write_upload_failures_log() {
   return 0;
 }
 
-static void retry_uploads(int sig) {
-  if (sig == SIGALRM) {
-    upload_list_t files_to_sort;
-    upload_list_init(&files_to_sort);
-    int new_upload_failure = 0;
+static void retry_uploads(time_t current_time) {
+  upload_list_t files_to_sort;
+  upload_list_init(&files_to_sort);
+  int new_upload_failure = 0;
 
-    time_t current_time = time(NULL);
-    int idx;
-    for (idx = 0; idx < num_upload_subdirectories; ++idx) {
-      DIR* handle = opendir(upload_directories[idx]);
-      if (handle == NULL) {
-        syslog(LOG_ERR,
-               "retry_uploads:opendir(\"%s\"): %s",
-               upload_directories[idx],
-               strerror(errno));
+  int idx;
+  for (idx = 0; idx < num_upload_subdirectories; ++idx) {
+    DIR* handle = opendir(upload_directories[idx]);
+    if (handle == NULL) {
+      syslog(LOG_ERR,
+          "retry_uploads:opendir(\"%s\"): %s",
+          upload_directories[idx],
+          strerror(errno));
+      continue;
+    }
+    struct dirent* entry;
+    while ((entry = readdir(handle))) {
+      char absolute_path[PATH_MAX + 1];
+      if (join_paths(upload_directories[idx], entry->d_name, absolute_path)) {
         continue;
       }
-      struct dirent* entry;
-      while ((entry = readdir(handle))) {
-        char absolute_path[PATH_MAX + 1];
-        if (join_paths(upload_directories[idx], entry->d_name, absolute_path)) {
-          continue;
-        }
-        struct stat file_info;
-        if (stat(absolute_path, &file_info)) {
-          syslog(LOG_ERR,
-                 "retry_uploads:stat(\"%s\"): %s",
-                 absolute_path,
-                 strerror(errno));
-          continue;
-        }
-        if (S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode)) {
-          if (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
-            syslog(LOG_INFO, "Retrying file: %s", absolute_path);
-            if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
-              if (unlink(absolute_path)) {
-                syslog(LOG_ERR,
-                       "retry_uploads:unlink(\"%s\"): %s",
-                       absolute_path,
-                       strerror(errno));
-              } else {
-                continue;
-              }
+      struct stat file_info;
+      if (stat(absolute_path, &file_info)) {
+        syslog(LOG_ERR,
+            "retry_uploads:stat(\"%s\"): %s",
+            absolute_path,
+            strerror(errno));
+        continue;
+      }
+      if (S_ISREG(file_info.st_mode) || S_ISLNK(file_info.st_mode)) {
+        if (current_time - file_info.st_ctime > RETRY_INTERVAL_SECONDS) {
+          syslog(LOG_INFO, "Retrying file: %s", absolute_path);
+          if (curl_send(absolute_path, upload_subdirectories[idx]) == 0) {
+            if (unlink(absolute_path)) {
+              syslog(LOG_ERR,
+                  "retry_uploads:unlink(\"%s\"): %s",
+                  absolute_path,
+                  strerror(errno));
+            } else {
+              continue;
             }
           }
-
-          upload_list_append(&files_to_sort,
-                             absolute_path,
-                             file_info.st_ctime,
-                             file_info.st_blocks,
-                             idx);
         }
-      }
-      if (closedir(handle)) {
-        syslog(LOG_ERR, "retry_uploads:closedir: %s", strerror(errno));
+
+        upload_list_append(&files_to_sort,
+            absolute_path,
+            file_info.st_ctime,
+            file_info.st_blocks,
+            idx);
       }
     }
+    if (closedir(handle)) {
+      syslog(LOG_ERR, "retry_uploads:closedir: %s", strerror(errno));
+    }
+  }
 
-    if (files_to_sort.entries != NULL) {
-      upload_list_sort(&files_to_sort);
-      int total_blocks = 0;
-      for (idx = 0; idx < files_to_sort.length; ++idx) {
-        upload_entry_t* entry = &files_to_sort.entries[idx];
-        if (total_blocks + entry->size > MAX_UPLOADS_BLOCKS) {
-          syslog(LOG_INFO,
-                 "Removing old upload: %s",
-                 files_to_sort.entries[idx].filename);
-          if (unlink(files_to_sort.entries[idx].filename)) {
-            syslog(LOG_ERR,
-                   "retry_uploads:unlink(\"%s\"): %s",
-                   files_to_sort.entries[idx].filename,
-                   strerror(errno));
-          } else {
-            log_upload_failure(files_to_sort.entries[idx].index);
-            new_upload_failure = 1;
-          }
+  if (files_to_sort.entries != NULL) {
+    upload_list_sort(&files_to_sort);
+    int total_blocks = 0;
+    for (idx = 0; idx < files_to_sort.length; ++idx) {
+      upload_entry_t* entry = &files_to_sort.entries[idx];
+      if (total_blocks + entry->size > MAX_UPLOADS_BLOCKS) {
+        syslog(LOG_INFO,
+            "Removing old upload: %s",
+            files_to_sort.entries[idx].filename);
+        if (unlink(files_to_sort.entries[idx].filename)) {
+          syslog(LOG_ERR,
+              "retry_uploads:unlink(\"%s\"): %s",
+              files_to_sort.entries[idx].filename,
+              strerror(errno));
         } else {
-          total_blocks += entry->size;
+          log_upload_failure(files_to_sort.entries[idx].index);
+          new_upload_failure = 1;
         }
+      } else {
+        total_blocks += entry->size;
       }
     }
-    upload_list_destroy(&files_to_sort);
+  }
+  upload_list_destroy(&files_to_sort);
 
-    if (new_upload_failure) {
-      (void)write_upload_failures_log();
-    }
-
-    alarm(RETRY_INTERVAL_SECONDS);
+  if (new_upload_failure) {
+    (void)write_upload_failures_log();
   }
 }
 
@@ -448,19 +450,6 @@ int read_bismark_id() {
   return 0;
 }
 
-static void initialize_signal_handler() {
-  struct sigaction action;
-  action.sa_handler = retry_uploads;
-  sigemptyset(&action.sa_mask);
-  action.sa_flags = SA_RESTART;
-  if (sigaction(SIGALRM, &action, NULL)) {
-    syslog(LOG_ERR, "initialize_signal_handler:sigaction: %s", strerror(errno));
-    exit(1);
-  }
-  sigemptyset(&block_set);
-  sigaddset(&block_set, SIGALRM);
-}
-
 int main(int argc, char** argv) {
   if (argc != 2) {
     strncpy(uploads_url, DEFAULT_UPLOADS_URL, MAX_URL_LENGTH);
@@ -492,9 +481,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  initialize_signal_handler();
-  alarm(RETRY_INTERVAL_SECONDS);
-
   /* Initialize inotify */
   int inotify_handle = inotify_init();
   if (inotify_handle < 0) {
@@ -522,53 +508,75 @@ int main(int argc, char** argv) {
     syslog(LOG_INFO, "Watching %s", upload_directories[idx]);
   }
 
+  time_t current_time = time(NULL);
+  time_t last_retry_time = current_time - RETRY_INTERVAL_SECONDS;
+
   while (1) {
-    char events_buffer[BUF_LEN];
-    int length = read(inotify_handle, events_buffer, BUF_LEN);
-    if (length < 0) {
-      if (errno != EINTR) {
-        syslog(LOG_ERR, "main:read: %s", strerror(errno));
-        curl_easy_cleanup(curl_handle);
-        return 1;
-      } else {
-        continue;
-      }
+    fd_set select_set;
+    FD_ZERO(&select_set);
+    FD_SET(inotify_handle, &select_set);
+    struct timeval select_timeout;
+    select_timeout.tv_sec =
+        RETRY_INTERVAL_SECONDS - (current_time - last_retry_time);
+    if (select_timeout.tv_sec < 0) {
+      select_timeout.tv_sec = 0;
     }
-    if (sigprocmask(SIG_BLOCK, &block_set, NULL) < 0) {
-      syslog(LOG_ERR, "main:sigprocmask(SIG_BLOCK): %s", strerror(errno));
-      exit(1);
-    }
-    int offset = 0;
-    while (offset < length) {
-      struct inotify_event* event \
-        = (struct inotify_event*)(events_buffer + offset);
-      if (event->len && (event->mask & IN_MOVED_TO)) {
-        int idx;
-        for (idx = 0; idx < num_upload_subdirectories; ++idx) {
-          if (event->wd == watch_descriptors[idx]) {
-            char absolute_path[PATH_MAX + 1];
-            if (join_paths(upload_directories[idx], event->name, absolute_path)) {
-              break;
-            }
-            syslog(LOG_INFO, "File move detected: %s", absolute_path);
-            if (!curl_send(absolute_path, upload_subdirectories[idx])) {
-              if (unlink(absolute_path)) {
-                syslog(LOG_ERR,
-                       "main:unlink(\"%s\"): %s",
-                       absolute_path,
-                       strerror(errno));
-              }
-            }
-            break;
+    select_timeout.tv_usec = 0;
+    printf("Waiting for %ld seconds\n", select_timeout.tv_sec);
+    int select_result = select(
+        inotify_handle + 1, &select_set, NULL, NULL, &select_timeout);
+    if (select_result > 0) {
+      if (FD_ISSET(inotify_handle, &select_set)) {
+        char events_buffer[BUF_LEN];
+        int length = read(inotify_handle, events_buffer, BUF_LEN);
+        if (length < 0) {
+          if (errno != EINTR) {
+            syslog(LOG_ERR, "main:read: %s", strerror(errno));
+            curl_easy_cleanup(curl_handle);
+            return 1;
+          } else {
+            continue;
           }
         }
+        int offset = 0;
+        while (offset < length) {
+          struct inotify_event* event \
+            = (struct inotify_event*)(events_buffer + offset);
+          if (event->len && (event->mask & IN_MOVED_TO)) {
+            int idx;
+            for (idx = 0; idx < num_upload_subdirectories; ++idx) {
+              if (event->wd == watch_descriptors[idx]) {
+                char absolute_path[PATH_MAX + 1];
+                if (join_paths(upload_directories[idx], event->name, absolute_path)) {
+                  break;
+                }
+                syslog(LOG_INFO, "File move detected: %s", absolute_path);
+                if (!curl_send(absolute_path, upload_subdirectories[idx])) {
+                  if (unlink(absolute_path)) {
+                    syslog(LOG_ERR,
+                           "main:unlink(\"%s\"): %s",
+                           absolute_path,
+                           strerror(errno));
+                  }
+                }
+                break;
+              }
+            }
+          }
+          offset += sizeof(*event) + event->len;
+        }
       }
-      offset += sizeof(*event) + event->len;
+      continue;
+    } else if (select_result < 0) {
+      if (errno != EINTR) {
+        syslog(LOG_ERR, "main:select: %s", strerror(errno));
+        curl_easy_cleanup(curl_handle);
+        return 1;
+      }
     }
-    if (sigprocmask(SIG_UNBLOCK, &block_set, NULL) < 0) {
-      syslog(LOG_ERR, "main:sigprocmask(SIG_UNBLOCK): %s", strerror(errno));
-      exit(1);
-    }
+
+    retry_uploads(current_time);
+    last_retry_time = current_time;
   }
   return 0;
 }
