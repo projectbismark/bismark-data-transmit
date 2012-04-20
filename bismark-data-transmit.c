@@ -42,7 +42,7 @@
 #define UPLOADS_ROOT  "/tmp/bismark-uploads"
 #endif
 #ifndef RETRY_INTERVAL_MINUTES
-#define RETRY_INTERVAL_MINUTES  1
+#define RETRY_INTERVAL_MINUTES  3
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef DEFAULT_UPLOADS_URL
@@ -51,8 +51,8 @@
 #ifndef MAX_UPLOADS_BLOCKS
 #define MAX_UPLOADS_BLOCKS  6144
 #endif
-#ifndef TRANSFER_TIMEOUT
-#define TRANSFER_TIMEOUT 300
+#ifndef TRANSFER_TIMEOUT_SECONDS
+#define TRANSFER_TIMEOUT_SECONDS 300
 #endif
 #ifndef FAILURES_LOG
 #define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
@@ -259,13 +259,6 @@ static int curl_send(const char* filename, const char* directory) {
            curl_error_message);
     return -1;
   }
-  if (curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT)) {
-    syslog(LOG_ERR,
-           "curl_send:curl_easy_setopt(CURLOPT_TIMEOUT, %ld): %s",
-           file_size,
-           curl_error_message);
-    return -1;
-  }
   if (curl_easy_perform(curl_handle)) {
     syslog(LOG_ERR, "curl_send:curl_easy_perform: %s", curl_error_message);
     fclose(handle);
@@ -307,6 +300,8 @@ static void retry_uploads(time_t current_time) {
   upload_list_t files_to_sort;
   upload_list_init(&files_to_sort);
   int new_upload_failure = 0;
+
+  syslog(LOG_INFO, "Checking for uploads to retry");
 
   int idx;
   for (idx = 0; idx < num_upload_subdirectories; ++idx) {
@@ -366,13 +361,13 @@ static void retry_uploads(time_t current_time) {
       upload_entry_t* entry = &files_to_sort.entries[idx];
       if (total_blocks + entry->size > MAX_UPLOADS_BLOCKS) {
         syslog(LOG_INFO,
-            "Removing old upload: %s",
-            files_to_sort.entries[idx].filename);
+               "Removing old upload: %s",
+               files_to_sort.entries[idx].filename);
         if (unlink(files_to_sort.entries[idx].filename)) {
           syslog(LOG_ERR,
-              "retry_uploads:unlink(\"%s\"): %s",
-              files_to_sort.entries[idx].filename,
-              strerror(errno));
+                 "retry_uploads:unlink(\"%s\"): %s",
+                 files_to_sort.entries[idx].filename,
+                 strerror(errno));
         } else {
           log_upload_failure(files_to_sort.entries[idx].index);
           new_upload_failure = 1;
@@ -417,6 +412,13 @@ static int initialize_curl() {
            "initialize_curl:curl_easy_setopt(CURLOPT_FAILONERROR): %s",
            curl_error_message);
     curl_easy_cleanup(curl_handle);
+    return -1;
+  }
+  if (curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT_SECONDS)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_TIMEOUT, %d): %s",
+           TRANSFER_TIMEOUT_SECONDS,
+           curl_error_message);
     return -1;
   }
 #ifdef SKIP_SSL_VERIFICATION
@@ -477,7 +479,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if(initialize_curl()) {
+  if (initialize_curl()) {
     return 1;
   }
 
@@ -509,9 +511,23 @@ int main(int argc, char** argv) {
   }
 
   time_t current_time = time(NULL);
+  if (current_time < 0) {
+    syslog(LOG_ERR,
+           "main:time: %s",
+           strerror(errno));
+    return 1;
+  }
   time_t last_retry_time = current_time - RETRY_INTERVAL_SECONDS;
 
   while (1) {
+    current_time = time(NULL);
+    if (current_time < 0) {
+      syslog(LOG_ERR,
+             "main:time: %s",
+             strerror(errno));
+      return 1;
+    }
+
     fd_set select_set;
     FD_ZERO(&select_set);
     FD_SET(inotify_handle, &select_set);
@@ -522,21 +538,20 @@ int main(int argc, char** argv) {
       select_timeout.tv_sec = 0;
     }
     select_timeout.tv_usec = 0;
-    printf("Waiting for %ld seconds\n", select_timeout.tv_sec);
     int select_result = select(
         inotify_handle + 1, &select_set, NULL, NULL, &select_timeout);
-    if (select_result > 0) {
+    if (select_result < 0) {
+      syslog(LOG_ERR, "main:select: %s", strerror(errno));
+      curl_easy_cleanup(curl_handle);
+      return 1;
+    } else if (select_result > 0) {
       if (FD_ISSET(inotify_handle, &select_set)) {
         char events_buffer[BUF_LEN];
         int length = read(inotify_handle, events_buffer, BUF_LEN);
         if (length < 0) {
-          if (errno != EINTR) {
-            syslog(LOG_ERR, "main:read: %s", strerror(errno));
-            curl_easy_cleanup(curl_handle);
-            return 1;
-          } else {
-            continue;
-          }
+          syslog(LOG_ERR, "main:read: %s", strerror(errno));
+          curl_easy_cleanup(curl_handle);
+          return 1;
         }
         int offset = 0;
         while (offset < length) {
@@ -547,7 +562,8 @@ int main(int argc, char** argv) {
             for (idx = 0; idx < num_upload_subdirectories; ++idx) {
               if (event->wd == watch_descriptors[idx]) {
                 char absolute_path[PATH_MAX + 1];
-                if (join_paths(upload_directories[idx], event->name, absolute_path)) {
+                if (join_paths(
+                      upload_directories[idx], event->name, absolute_path)) {
                   break;
                 }
                 syslog(LOG_INFO, "File move detected: %s", absolute_path);
@@ -566,17 +582,23 @@ int main(int argc, char** argv) {
           offset += sizeof(*event) + event->len;
         }
       }
-      continue;
-    } else if (select_result < 0) {
-      if (errno != EINTR) {
-        syslog(LOG_ERR, "main:select: %s", strerror(errno));
-        curl_easy_cleanup(curl_handle);
+    } else if (select_result == 0) {
+      current_time = time(NULL);
+      if (current_time < 0) {
+        syslog(LOG_ERR,
+               "main:time: %s",
+               strerror(errno));
+        return 1;
+      }
+      retry_uploads(current_time);
+      last_retry_time = time(NULL);
+      if (last_retry_time < 0) {
+        syslog(LOG_ERR,
+               "main:time: %s",
+               strerror(errno));
         return 1;
       }
     }
-
-    retry_uploads(current_time);
-    last_retry_time = current_time;
   }
   return 0;
 }
