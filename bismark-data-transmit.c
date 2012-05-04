@@ -512,9 +512,7 @@ int main(int argc, char** argv) {
 
   time_t current_time = time(NULL);
   if (current_time < 0) {
-    syslog(LOG_ERR,
-           "main:time: %s",
-           strerror(errno));
+    syslog(LOG_ERR, "main:time: %s", strerror(errno));
     return 1;
   }
   time_t last_retry_time = current_time - RETRY_INTERVAL_SECONDS;
@@ -522,9 +520,7 @@ int main(int argc, char** argv) {
   while (1) {
     current_time = time(NULL);
     if (current_time < 0) {
-      syslog(LOG_ERR,
-             "main:time: %s",
-             strerror(errno));
+      syslog(LOG_ERR, "main:time: %s", strerror(errno));
       return 1;
     }
 
@@ -585,17 +581,13 @@ int main(int argc, char** argv) {
     } else if (select_result == 0) {
       current_time = time(NULL);
       if (current_time < 0) {
-        syslog(LOG_ERR,
-               "main:time: %s",
-               strerror(errno));
+        syslog(LOG_ERR, "main:time: %s", strerror(errno));
         return 1;
       }
       retry_uploads(current_time);
       last_retry_time = time(NULL);
       if (last_retry_time < 0) {
-        syslog(LOG_ERR,
-               "main:time: %s",
-               strerror(errno));
+        syslog(LOG_ERR, "main:time: %s", strerror(errno));
         return 1;
       }
     }
