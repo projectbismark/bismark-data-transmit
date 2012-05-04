@@ -385,6 +385,10 @@ static void retry_uploads(time_t current_time) {
 }
 
 static int initialize_curl() {
+  if (curl_global_init(CURL_GLOBAL_ALL)) {
+    syslog(LOG_ERR, "initialize_curl:curl_global_init");
+    return -1;
+  }
   curl_handle = curl_easy_init();
   if (!curl_handle) {
     syslog(LOG_ERR, "initialize_curl:curl_easy_init");
