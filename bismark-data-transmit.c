@@ -54,6 +54,9 @@
 #ifndef TRANSFER_TIMEOUT_SECONDS
 #define TRANSFER_TIMEOUT_SECONDS 300
 #endif
+#ifndef CONNECT_TIMEOUT_SECONDS
+#define CONNECT_TIMEOUT_SECONDS 300
+#endif
 #ifndef FAILURES_LOG
 #define FAILURES_LOG  "/tmp/bismark-data-transmit-failures.log"
 #endif
@@ -422,6 +425,13 @@ static int initialize_curl() {
     syslog(LOG_ERR,
            "curl_send:curl_easy_setopt(CURLOPT_TIMEOUT, %d): %s",
            TRANSFER_TIMEOUT_SECONDS,
+           curl_error_message);
+    return -1;
+  }
+  if (curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, CONNECT_TIMEOUT_SECONDS)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_CONNECTTIMEOUT, %d): %s",
+           CONNECT_TIMEOUT_SECONDS,
            curl_error_message);
     return -1;
   }
