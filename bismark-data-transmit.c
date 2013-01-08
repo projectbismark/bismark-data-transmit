@@ -255,6 +255,12 @@ static int curl_send(const char* filename, const char* directory) {
            curl_error_message);
     return -1;
   }
+if (curl_easy_setopt(curl_handle,CURLOPT_SSLVERSION,CURL_SSLVERSION_SSLv3)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(SSLVERSION): %s",
+           curl_error_message);
+    return -1;
+  }
   if (curl_easy_setopt(curl_handle, CURLOPT_INFILESIZE, file_size)) {
     syslog(LOG_ERR,
            "curl_send:curl_easy_setopt(CURLOPT_INFILESIZE, %ld): %s",
