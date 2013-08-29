@@ -249,14 +249,6 @@ static int curl_send(const char* filename, const char* directory) {
            curl_error_message);
     return -1;
   }
-#ifdef DEBUG_MESSAGES
-  if (curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 1)) {
-    syslog(LOG_ERR,
-           "curl_send:curl_easy_setopt(CURLOPT_VERBOSE): %s",
-           curl_error_message);
-    return -1;
-  }
-#endif
   if (curl_easy_setopt(curl_handle, CURLOPT_READDATA, handle)) {
     syslog(LOG_ERR,
            "curl_send:curl_easy_setopt(CURLOPT_READDATA): %s",
@@ -419,6 +411,15 @@ static int initialize_curl() {
     curl_easy_cleanup(curl_handle);
     return -1;
   }
+#ifdef DEBUG_MESSAGES
+  syslog(LOG_INFO, "Enabling curl debug messages");
+  if (curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 1)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_VERBOSE): %s",
+           curl_error_message);
+    return -1;
+  }
+#endif
   /* CURLOPT_UPLOAD uses HTTP PUT by default. */
   if (curl_easy_setopt(curl_handle, CURLOPT_UPLOAD, 1L)) {
     syslog(LOG_ERR,
