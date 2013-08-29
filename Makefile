@@ -21,6 +21,9 @@ endif
 ifdef SKIP_SSL_VERIFICATION
 CFLAGS += -DSKIP_SSL_VERIFICATION="yes"
 endif
+ifdef DEBUG_MESSAGES
+CFLAGS += -DDEBUG_MESSAGES="yes"
+endif
 LDFLAGS += -lcurl -lz -lssl -lcrypto
 SRCS = \
 	bismark-data-transmit.c \

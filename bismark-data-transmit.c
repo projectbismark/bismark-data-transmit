@@ -46,7 +46,7 @@
 #endif
 #define RETRY_INTERVAL_SECONDS  (RETRY_INTERVAL_MINUTES * 60)
 #ifndef DEFAULT_UPLOADS_URL
-#define DEFAULT_UPLOADS_URL  "https://projectbismark.net:8081/upload/"
+#define DEFAULT_UPLOADS_URL  "https://uploads.projectbismark.net:8081/upload/"
 #endif
 #ifndef MAX_UPLOADS_BLOCKS
 #define MAX_UPLOADS_BLOCKS  6144
@@ -249,6 +249,14 @@ static int curl_send(const char* filename, const char* directory) {
            curl_error_message);
     return -1;
   }
+#ifdef DEBUG_MESSAGES
+  if (curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 1)) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_VERBOSE): %s",
+           curl_error_message);
+    return -1;
+  }
+#endif
   if (curl_easy_setopt(curl_handle, CURLOPT_READDATA, handle)) {
     syslog(LOG_ERR,
            "curl_send:curl_easy_setopt(CURLOPT_READDATA): %s",
