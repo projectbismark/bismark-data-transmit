@@ -242,6 +242,12 @@ static int curl_send(const char* filename, const char* directory) {
   curl_free(encoded_directory);
 
   /* Set up and execute the transfer. */
+  if (curl_easy_setopt(curl_handle, CURLOPT_CAINFO, "/etc/ssl/certs/gd_int.crt")) {
+    syslog(LOG_ERR,
+           "curl_send:curl_easy_setopt(CURLOPT_SSLVERSION): %s",
+           curl_error_message);
+    return -1;
+  }
   if (curl_easy_setopt(curl_handle, CURLOPT_URL, url)) {
     syslog(LOG_ERR,
            "curl_send:curl_easy_setopt(CURLOPT_URL, \"%s\"): %s",
